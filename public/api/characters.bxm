@@ -1,0 +1,58 @@
+<bx:header name="Content-Type" value="application/json">
+<bx:script>
+
+	characterService = new models.CharacterService();
+
+	if ( cgi.request_method == "POST" ) {
+		body = jsonDeserialize( getHttpRequestData().content );
+		charId = characterService.createCharacter(
+			name            = body.name,
+			classId         = body.classId,
+			str             = body.str,
+			dex             = body.dex,
+			con             = body.con,
+			intScore        = body[ "int" ],
+			wis             = body.wis,
+			cha             = body.cha,
+			species         = body.species,
+			background      = body.background,
+			alignment       = body.alignment,
+			knownCantrip    = body.knownCantrip ?: "",
+			knownSpell      = body.knownSpell ?: "",
+			choiceAbilities = body.choiceAbilities ?: [],
+			classSkills     = body.classSkills ?: [],
+			fightingStyle   = body.fightingStyle ?: ""
+		);
+		writeOutput( jsonSerialize( { "id": charId } ) );
+	} else {
+		combatService = new models.CombatService();
+		rows = characterService.listSavedCharacters();
+		result = [];
+		for ( row in rows ) {
+			result.append( {
+				"id"              : row.id,
+				"name"            : row.name,
+				"className"       : row.className,
+				"species"         : row.species,
+				"level"           : row.level,
+				"background"      : row.background ?: "",
+				"alignment"       : row.alignment ?: "",
+				"hitPoints"       : row.hit_points,
+				"maxHitPoints"    : row.max_hit_points,
+				"armorClass"      : row.armor_class,
+				"speed"           : row.speed,
+				"proficiencyBonus": row.proficiency_bonus,
+				"experiencePoints": row.experience_points,
+				"gold"            : row.gold,
+				"abilities"       : {
+					"str": row.str, "dex": row.dex, "con": row.con,
+					"int": row.int_score, "wis": row.wis, "cha": row.cha
+				},
+				"currentLevelXp"  : combatService.xpForLevel( row.level ),
+				"nextLevelXp"     : row.level < 20 ? combatService.xpForLevel( row.level + 1 ) : 0,
+				"lastPlayed"      : dateTimeFormat( row.updated_at, "yyyy-MM-dd HH:mm" )
+			} );
+		}
+		writeOutput( jsonSerialize( result ) );
+	}
+</bx:script>

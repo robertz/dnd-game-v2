@@ -1,0 +1,11 @@
+<bx:header name="Content-Type" value="application/json">
+<bx:script>
+
+	mapService = new models.MapService();
+
+	if ( len( url.module ?: "" ) ) {
+		writeOutput( jsonSerialize( mapService.getModuleMap( url.module, url.map ) ) );
+	} else {
+		writeOutput( jsonSerialize( mapService.getLevel( url.level ?: "openField" ) ) );
+	}
+</bx:script>

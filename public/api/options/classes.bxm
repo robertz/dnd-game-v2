@@ -1,0 +1,30 @@
+<bx:header name="Content-Type" value="application/json">
+<bx:script>
+
+	characterService = new models.CharacterService();
+	combatService = new models.CombatService();
+	rows = characterService.listClasses();
+	result = [];
+
+	for ( row in rows ) {
+		cls = {
+			"id"              : row.id,
+			"name"            : row.name,
+			"primaryAbility"  : row.primary_ability,
+			"hitDie"          : row.hit_die,
+			"savingThrows"    : row.saving_throw_proficiencies,
+			"skillChoice"     : combatService.parseClassSkillChoice( row.skill_proficiencies ),
+			"hasFightingStyle": characterService.classFightingStyleAtCreation( row.id ),
+			"isFullCaster"    : combatService.isFullCasterClass( row.name ),
+			"fightingStyles"  : []
+		};
+
+		if ( cls.hasFightingStyle ) {
+			cls.fightingStyles = combatService.fightingStyleNames();
+		}
+
+		result.append( cls );
+	}
+
+	writeOutput( jsonSerialize( result ) );
+</bx:script>

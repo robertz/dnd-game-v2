@@ -1,0 +1,696 @@
+class extends="modules.socketbox.models.WebSocketCore" {
+
+	public struct function configure() {
+		return { "debugMode": false };
+	}
+
+	public function onConnect( required channel ) {
+	}
+
+	public function onMessage( required message, required channel ) {
+		var data  = jsonDeserialize( message );
+		var state = application.encounters[ data.charId ] ?: "";
+
+		if ( isSimpleValue( state ) ) {
+			sendMessage( jsonSerialize( { "type": "error", "message": "No active encounter" } ), channel );
+			return;
+		}
+
+		var combatService    = new models.CombatService();
+		var characterService = new models.CharacterService();
+		var mapService       = new models.MapService();
+
+		switch ( data.type ) {
+			case "move":
+				_handleMove( state, data, combatService, characterService, mapService );
+				break;
+			case "attack":
+				_handleAttack( state, data, combatService );
+				break;
+			case "cast_cantrip":
+				_handleCastCantrip( state, data, combatService );
+				break;
+			case "cast_spell":
+				_handleCastSpell( state, data, combatService );
+				break;
+			case "smite":
+				_handleSmite( state, data, combatService );
+				break;
+			case "off_hand_attack":
+				_handleOffHandAttack( state, combatService );
+				break;
+			case "grapple":
+				_handleGrapple( state, combatService );
+				break;
+			case "shove":
+				_handleShove( state, combatService );
+				break;
+			case "breath_weapon":
+				_handleBreathWeapon( state, combatService );
+				break;
+			case "use_item":
+				_handleUseItem( state, data, combatService, characterService );
+				break;
+			case "second_wind":
+				_handleSecondWind( state, combatService );
+				break;
+			case "start_rage":
+				_handleStartRage( state, combatService );
+				break;
+			case "end_rage":
+				_handleEndRage( state, combatService );
+				break;
+			case "death_save":
+				_handleDeathSave( state, combatService );
+				break;
+			case "end_turn":
+				_handleEndTurn( state, combatService );
+				break;
+			case "auto_step":
+				_handleAutoStep( state, combatService );
+				break;
+			case "select_target":
+				_handleSelectTarget( state, data );
+				break;
+			case "confirm_asi":
+				_handleConfirmAsi( state, data, combatService );
+				break;
+			case "confirm_feat":
+				_handleConfirmFeat( state, data, combatService );
+				break;
+			case "continue_exploring":
+				_handleContinueExploring( state );
+				break;
+			case "short_rest":
+				_handleShortRest( state, data, combatService );
+				break;
+			case "long_rest":
+				_handleLongRest( state, combatService );
+				break;
+		}
+
+		_maybeSaveProgress( state, combatService );
+		// Bound the retained log so a long session doesn't grow the state
+		// struct (and every future broadcast's slice source) without limit.
+		if ( state.log.len() > 100 ) {
+			state.log = arraySlice( state.log, 1, 100 );
+		}
+		application.encounters[ data.charId ] = state;
+		sendMessage( jsonSerialize( _buildBroadcast( state, combatService ) ), channel );
+	}
+
+	public function onClose( required channel ) {
+	}
+
+	// ── Private helpers ───────────────────────────────────────────────────────
+
+	private function _handleMove( state, data, combatService, characterService, mapService ) {
+		if (
+			arguments.state.gameOver || arguments.state.currentTurn != "player" ||
+			arguments.state.player.hitPoints <= 0 || arguments.combatService.cantMove( arguments.state.player )
+		) {
+			return;
+		}
+
+		var player = arguments.state.player;
+		var px = int( val( arguments.data.x ) );
+		var py = int( val( arguments.data.y ) );
+
+		if ( px == player.position.x && py == player.position.y ) {
+			return;
+		}
+		if ( !arguments.combatService.isWalkable( arguments.state.map, px, py ) ) {
+			return;
+		}
+		for ( var opp in arguments.state.opponents ) {
+			if ( opp.hitPoints > 0 && opp.position.x == px && opp.position.y == py ) {
+				return;
+			}
+		}
+
+		var distance = arguments.combatService.pathDistance( arguments.state.map, player.position, { "x": px, "y": py } );
+		if ( distance < 0 || distance > arguments.state.movementRemaining ) {
+			arguments.state.log.prepend( "#player.name# can't reach that tile — only #arguments.state.movementRemaining# square(s) of movement left." );
+			return;
+		}
+
+		var startPosition = { "x": player.position.x, "y": player.position.y };
+		player.position = { "x": px, "y": py };
+		arguments.state.movementRemaining -= distance;
+		arguments.state.log.prepend( "#player.name# moves to (#px#, #py#)." );
+
+		arguments.combatService.checkOpportunityAttacks( arguments.state, player, true, startPosition );
+		_updateCombatState( arguments.state, arguments.combatService );
+		_checkLoot( arguments.state, arguments.characterService, arguments.mapService );
+		_checkMapTransition( arguments.state, arguments.mapService, arguments.combatService );
+	}
+
+	private function _handleAttack( state, data, combatService ) {
+		if (
+			arguments.state.gameOver || !arguments.state.initiativeRolled || arguments.state.currentTurn != "player" ||
+			arguments.state.player.hitPoints <= 0 || arguments.combatService.isIncapacitated( arguments.state.player ) ||
+			arguments.state.attacksUsedThisTurn >= arguments.combatService.attacksPerTurn( arguments.state.player )
+		) {
+			return;
+		}
+
+		var player   = arguments.state.player;
+		var opponent = arguments.state.opponents[ arguments.state.selectedOpponentIndex ];
+		if ( isNull( opponent ) || opponent.hitPoints <= 0 ) {
+			arguments.state.log.prepend( "No valid target selected." );
+			return;
+		}
+		arguments.state.opponent = opponent;
+
+		var choice = arguments.combatService.pickWeaponForDistance( player, arguments.combatService.chebyshev( player, opponent ), arguments.state.map, opponent.position );
+		if ( isNull( choice ) ) {
+			arguments.state.log.prepend( "#opponent.name# is out of reach." );
+			return;
+		}
+
+		arguments.state.attacksUsedThisTurn += 1;
+		arguments.state.actionUsed = true;
+		arguments.combatService.playerAttack( arguments.state, choice.weapon, choice.disadvantage );
+		arguments.state.selectedOpponentIndex = arguments.state.opponent.mobIndex;
+
+		if ( !arguments.state.gameOver && arguments.state.attacksUsedThisTurn >= arguments.combatService.attacksPerTurn( player ) ) {
+			arguments.combatService.endPlayerTurn( arguments.state );
+		}
+	}
+
+	private function _handleCastCantrip( state, data, combatService ) {
+		if (
+			arguments.state.gameOver || !arguments.state.initiativeRolled || arguments.state.currentTurn != "player" ||
+			arguments.state.actionUsed || arguments.state.player.hitPoints <= 0 ||
+			arguments.combatService.isIncapacitated( arguments.state.player )
+		) {
+			return;
+		}
+		arguments.state.opponent = arguments.state.opponents[ arguments.state.selectedOpponentIndex ];
+		arguments.combatService.castCantrip( arguments.state, arguments.data.spellName );
+		arguments.state.selectedOpponentIndex = arguments.state.opponent.mobIndex;
+		if ( !arguments.state.gameOver ) {
+			arguments.combatService.endPlayerTurn( arguments.state );
+		}
+	}
+
+	private function _handleCastSpell( state, data, combatService ) {
+		if (
+			arguments.state.gameOver || !arguments.state.initiativeRolled || arguments.state.currentTurn != "player" ||
+			arguments.state.actionUsed || arguments.state.player.hitPoints <= 0 ||
+			arguments.combatService.isIncapacitated( arguments.state.player )
+		) {
+			return;
+		}
+		arguments.state.opponent = arguments.state.opponents[ arguments.state.selectedOpponentIndex ];
+		arguments.combatService.castLeveledSpell( arguments.state, arguments.data.spellName );
+		arguments.state.selectedOpponentIndex = arguments.state.opponent.mobIndex;
+		if ( !arguments.state.gameOver ) {
+			arguments.combatService.endPlayerTurn( arguments.state );
+		}
+	}
+
+	private function _handleSmite( state, data, combatService ) {
+		if (
+			arguments.state.gameOver || !arguments.state.initiativeRolled || arguments.state.currentTurn != "player" ||
+			arguments.state.player.hitPoints <= 0 || arguments.combatService.isIncapacitated( arguments.state.player ) ||
+			arguments.state.attacksUsedThisTurn >= arguments.combatService.attacksPerTurn( arguments.state.player )
+		) {
+			return;
+		}
+		arguments.state.opponent = arguments.state.opponents[ arguments.state.selectedOpponentIndex ];
+		arguments.state.attacksUsedThisTurn += 1;
+		arguments.state.actionUsed = true;
+		arguments.combatService.smiteAttack( arguments.state, arguments.data.slotLevel );
+		arguments.state.selectedOpponentIndex = arguments.state.opponent.mobIndex;
+		if ( !arguments.state.gameOver && arguments.state.attacksUsedThisTurn >= arguments.combatService.attacksPerTurn( arguments.state.player ) ) {
+			arguments.combatService.endPlayerTurn( arguments.state );
+		}
+	}
+
+	private function _handleOffHandAttack( state, combatService ) {
+		if (
+			arguments.state.gameOver || !arguments.state.initiativeRolled || arguments.state.currentTurn != "player" ||
+			arguments.state.player.hitPoints <= 0 || arguments.combatService.isIncapacitated( arguments.state.player )
+		) {
+			return;
+		}
+		arguments.combatService.offHandAttack( arguments.state );
+	}
+
+	private function _handleGrapple( state, combatService ) {
+		if (
+			arguments.state.gameOver || !arguments.state.initiativeRolled || arguments.state.currentTurn != "player" ||
+			arguments.state.actionUsed || arguments.state.player.hitPoints <= 0 ||
+			arguments.combatService.isIncapacitated( arguments.state.player )
+		) {
+			return;
+		}
+		arguments.state.opponent = arguments.state.opponents[ arguments.state.selectedOpponentIndex ];
+		arguments.combatService.attemptGrapple( arguments.state, arguments.state.player, arguments.state.opponent );
+		arguments.state.selectedOpponentIndex = arguments.state.opponent.mobIndex;
+		if ( !arguments.state.gameOver ) {
+			arguments.combatService.endPlayerTurn( arguments.state );
+		}
+	}
+
+	private function _handleShove( state, combatService ) {
+		if (
+			arguments.state.gameOver || !arguments.state.initiativeRolled || arguments.state.currentTurn != "player" ||
+			arguments.state.actionUsed || arguments.state.player.hitPoints <= 0 ||
+			arguments.combatService.isIncapacitated( arguments.state.player )
+		) {
+			return;
+		}
+		arguments.state.opponent = arguments.state.opponents[ arguments.state.selectedOpponentIndex ];
+		arguments.combatService.attemptShove( arguments.state, arguments.state.player, arguments.state.opponent );
+		arguments.state.selectedOpponentIndex = arguments.state.opponent.mobIndex;
+		if ( !arguments.state.gameOver ) {
+			arguments.combatService.endPlayerTurn( arguments.state );
+		}
+	}
+
+	private function _handleBreathWeapon( state, combatService ) {
+		if (
+			arguments.state.gameOver || !arguments.state.initiativeRolled || arguments.state.currentTurn != "player" ||
+			arguments.state.actionUsed || arguments.state.player.hitPoints <= 0 ||
+			arguments.combatService.isIncapacitated( arguments.state.player )
+		) {
+			return;
+		}
+		arguments.state.opponent = arguments.state.opponents[ arguments.state.selectedOpponentIndex ];
+		arguments.combatService.useBreathWeapon( arguments.state );
+		arguments.state.selectedOpponentIndex = arguments.state.opponent.mobIndex;
+		if ( !arguments.state.gameOver ) {
+			arguments.combatService.endPlayerTurn( arguments.state );
+		}
+	}
+
+	private function _handleUseItem( state, data, combatService, characterService ) {
+		if ( arguments.state.gameOver || arguments.state.player.hitPoints <= 0 ) {
+			return;
+		}
+		if (
+			arguments.state.initiativeRolled &&
+			( arguments.state.currentTurn != "player" || arguments.state.actionUsed || arguments.combatService.isIncapacitated( arguments.state.player ) )
+		) {
+			return;
+		}
+		var index = -1;
+		for ( var i = 1; i <= arguments.state.items.len(); i++ ) {
+			if ( arguments.state.items[ i ].id == arguments.data.inventoryId ) {
+				index = i;
+				break;
+			}
+		}
+		if ( index == -1 || arguments.state.items[ index ].quantity <= 0 ) {
+			return;
+		}
+		if ( !arguments.combatService.useConsumableItem( arguments.state, arguments.state.items[ index ].itemName ) ) {
+			return;
+		}
+		arguments.characterService.useOneItem( arguments.data.inventoryId );
+		arguments.state.items = arguments.characterService.getItemInventory( arguments.state.player.characterId );
+		if ( arguments.state.initiativeRolled ) {
+			arguments.state.actionUsed = true;
+			arguments.combatService.endPlayerTurn( arguments.state );
+		}
+	}
+
+	private function _handleSecondWind( state, combatService ) {
+		if (
+			arguments.state.gameOver || !arguments.state.initiativeRolled || arguments.state.currentTurn != "player" ||
+			arguments.state.player.hitPoints <= 0 || arguments.combatService.isIncapacitated( arguments.state.player )
+		) {
+			return;
+		}
+		arguments.combatService.useSecondWind( arguments.state );
+	}
+
+	private function _handleStartRage( state, combatService ) {
+		if (
+			arguments.state.gameOver || !arguments.state.initiativeRolled || arguments.state.currentTurn != "player" ||
+			arguments.state.player.hitPoints <= 0 || arguments.combatService.isIncapacitated( arguments.state.player )
+		) {
+			return;
+		}
+		arguments.combatService.startRage( arguments.state );
+	}
+
+	private function _handleEndRage( state, combatService ) {
+		if ( arguments.state.gameOver || arguments.state.currentTurn != "player" ) {
+			return;
+		}
+		arguments.combatService.endRage( arguments.state );
+	}
+
+	private function _handleDeathSave( state, combatService ) {
+		if (
+			arguments.state.gameOver || arguments.state.currentTurn != "player" ||
+			!structKeyExists( arguments.state.player, "isDying" ) || !arguments.state.player.isDying
+		) {
+			return;
+		}
+		arguments.combatService.rollDeathSave( arguments.state );
+		if ( !arguments.state.gameOver ) {
+			arguments.combatService.endPlayerTurn( arguments.state );
+		}
+	}
+
+	private function _handleEndTurn( state, combatService ) {
+		if ( arguments.state.gameOver || !arguments.state.initiativeRolled || arguments.state.currentTurn != "player" ) {
+			return;
+		}
+		arguments.combatService.endPlayerTurn( arguments.state );
+	}
+
+	private function _handleAutoStep( state, combatService ) {
+		if ( arguments.state.gameOver ) {
+			arguments.state.autoBattling = false;
+			return;
+		}
+		if ( !arguments.state.initiativeRolled ) {
+			return;
+		}
+		arguments.state.autoBattling = true;
+
+		if ( arguments.state.currentTurn == "player" ) {
+			if ( structKeyExists( arguments.state.player, "isDying" ) && arguments.state.player.isDying ) {
+				arguments.combatService.rollDeathSave( arguments.state );
+			} else if ( arguments.state.player.hitPoints > 0 ) {
+				arguments.state.opponent = arguments.state.opponents[ arguments.state.selectedOpponentIndex ];
+				arguments.combatService.playerDecideAndAct( arguments.state );
+				arguments.state.selectedOpponentIndex = arguments.state.opponent.mobIndex;
+			}
+			if ( !arguments.state.gameOver ) {
+				arguments.combatService.endPlayerTurn( arguments.state );
+			}
+		}
+
+		if ( arguments.state.gameOver ) {
+			arguments.state.autoBattling = false;
+		}
+	}
+
+	private function _handleSelectTarget( state, data ) {
+		if ( arguments.state.gameOver || arguments.state.currentTurn != "player" ) {
+			return;
+		}
+		for ( var opp in arguments.state.opponents ) {
+			if ( opp.mobIndex == arguments.data.mobIndex && opp.hitPoints > 0 ) {
+				arguments.state.selectedOpponentIndex = arguments.data.mobIndex;
+				return;
+			}
+		}
+	}
+
+	private function _handleConfirmAsi( state, data, combatService ) {
+		if ( !structKeyExists( arguments.state.player, "pendingAbilityScoreImprovements" ) || arguments.state.player.pendingAbilityScoreImprovements <= 0 ) {
+			return;
+		}
+		var mode = arguments.data.mode;
+		arguments.state.asiMode = mode;
+		if ( mode != "feat" ) {
+			arguments.state.asiAbility1 = arguments.data.ability1 ?: "str";
+			arguments.state.asiAbility2 = arguments.data.ability2 ?: "dex";
+			var abilities = ( mode == "double" ) ? [ arguments.state.asiAbility1, arguments.state.asiAbility2 ] : [ arguments.state.asiAbility1 ];
+			arguments.combatService.applyAbilityScoreImprovement( arguments.state, { "abilities": abilities } );
+		}
+	}
+
+	private function _handleConfirmFeat( state, data, combatService ) {
+		if ( !len( arguments.data.featName ?: "" ) ) {
+			return;
+		}
+		if ( arguments.data.featName == "Skilled" && ( arguments.data.skills ?: [] ).len() != 3 ) {
+			return;
+		}
+		arguments.combatService.grantChosenFeat( arguments.state, arguments.data.featName, arguments.data.skills ?: [] );
+	}
+
+	private function _handleContinueExploring( state ) {
+		if ( !arguments.state.gameOver || arguments.state.outcome != "victory" ) {
+			return;
+		}
+		arguments.state.opponents             = [];
+		arguments.state.opponent              = {};
+		arguments.state.gameOver              = false;
+		arguments.state.outcome               = "";
+		arguments.state.initiativeRolled      = false;
+		arguments.state.player.inCombat       = false;
+		arguments.state.stateSaved            = false;
+		arguments.state.round                 = 1;
+		arguments.state.currentTurn           = "player";
+		arguments.state.autoBattling          = false;
+		arguments.state.movementRemaining     = int( arguments.state.player.speed / 5 );
+		arguments.state.log                   = [ "The dungeon is cleared. You stand victorious." ];
+	}
+
+	private function _handleShortRest( state, data, combatService ) {
+		var player = arguments.state.player;
+		if ( structKeyExists( player, "inCombat" ) && player.inCombat ) {
+			return;
+		}
+		var diceCount = val( arguments.data.diceCount ?: 1 );
+		var maxDice   = max( 0, player.hitDiceMax - player.hitDiceSpent );
+		diceCount = max( 0, min( diceCount, maxDice ) );
+		var result = arguments.combatService.shortRest( player, diceCount );
+		if ( result.rolls.len() ) {
+			var sign = result.conMod >= 0 ? "+" : "";
+			var rollList = arrayToList( result.rolls.map( function( r ) { return "#r##sign##result.conMod#"; } ), " + " );
+			arguments.state.log.prepend( "#player.name# takes a Short Rest, spending #result.rolls.len()# Hit Die#( result.rolls.len() == 1 ? '' : 'ce' )#: #rollList# = +#result.healing# HP (#player.hitPoints#/#player.maxHitPoints# HP)." );
+		} else {
+			arguments.state.log.prepend( "#player.name# takes a Short Rest." );
+		}
+	}
+
+	private function _handleLongRest( state, combatService ) {
+		var player = arguments.state.player;
+		if ( structKeyExists( player, "inCombat" ) && player.inCombat ) {
+			return;
+		}
+		var result = arguments.combatService.longRest( player );
+		if ( !result.success ) {
+			arguments.state.log.prepend( "#player.name# can't take another Long Rest yet — about #result.hoursUntilNext# more hour#( result.hoursUntilNext == 1 ? '' : 's' )# of in-game time needed." );
+			return;
+		}
+		arguments.state.log.prepend( "#player.name# takes a Long Rest — fully restored (#player.maxHitPoints#/#player.maxHitPoints# HP). All spell slots and other resources recovered." );
+	}
+
+	private function _updateCombatState( state, combatService ) {
+		if ( arguments.state.gameOver ) {
+			arguments.state.player.inCombat = false;
+			return;
+		}
+		var player      = arguments.state.player;
+		var nowInCombat = false;
+		for ( var opp in arguments.state.opponents ) {
+			opp.visible = ( opp.hitPoints <= 0 ) || arguments.combatService.hasLineOfSight( arguments.state.map, opp.position, player.position );
+			if ( opp.hitPoints > 0 && opp.visible ) {
+				nowInCombat = true;
+			}
+		}
+		player.inCombat = nowInCombat;
+
+		if ( nowInCombat && !arguments.state.initiativeRolled ) {
+			arguments.state.initiativeRolled = true;
+			arguments.combatService.rollForInitiative( arguments.state );
+			return;
+		}
+		// Out of combat, exhausting movement still ends the round via
+		// endPlayerTurn() — even before initiative — so every mob on the map
+		// takes its converge-on-the-player turn from the moment the map starts,
+		// not only once one becomes visible.
+		if ( !nowInCombat && arguments.state.movementRemaining <= 0 && arguments.state.currentTurn == "player" ) {
+			arguments.combatService.endPlayerTurn( arguments.state );
+		}
+	}
+
+	private function _checkLoot( state, characterService, mapService ) {
+		if ( arguments.state.gameOver || ( structKeyExists( arguments.state.player, "inCombat" ) && arguments.state.player.inCombat ) ) {
+			return;
+		}
+		var remaining = [];
+		var collected = false;
+		var player = arguments.state.player;
+		for ( var poi in arguments.state.gridPois ) {
+			if ( !collected && poi.type == "loot" && poi.x == player.position.x && poi.y == player.position.y ) {
+				collected = true;
+				_grantLoot( arguments.state, poi.payload, arguments.characterService );
+				arguments.mapService.deletePoiAt( arguments.state.moduleSlug, arguments.state.mapSlug, poi.x, poi.y );
+			} else {
+				remaining.append( poi );
+			}
+		}
+		if ( collected ) {
+			arguments.state.gridPois   = remaining;
+			arguments.state.map.pois   = remaining;
+		}
+	}
+
+	private function _grantLoot( state, payload, characterService ) {
+		var player   = arguments.state.player;
+		var messages = [];
+		if ( structKeyExists( arguments.payload, "gold" ) && arguments.payload.gold > 0 ) {
+			arguments.characterService.adjustGold( player.characterId, arguments.payload.gold );
+			player.gold = ( structKeyExists( player, "gold" ) ? player.gold : 0 ) + arguments.payload.gold;
+			messages.append( "#arguments.payload.gold# gold" );
+		}
+		if ( structKeyExists( arguments.payload, "items" ) ) {
+			for ( var lootItem in arguments.payload.items ) {
+				var qty = structKeyExists( lootItem, "quantity" ) ? lootItem.quantity : 1;
+				arguments.characterService.addItemByName( player.characterId, lootItem.name, qty );
+				messages.append( "#qty#x #lootItem.name#" );
+			}
+		}
+		if ( messages.len() ) {
+			arguments.state.log.prepend( "#player.name# finds: #arrayToList( messages, ', ' )#." );
+		}
+	}
+
+	private function _checkMapTransition( state, mapService, combatService ) {
+		if ( arguments.state.gameOver || ( structKeyExists( arguments.state.player, "inCombat" ) && arguments.state.player.inCombat ) ) {
+			return;
+		}
+		var player = arguments.state.player;
+		for ( var poi in arguments.state.gridPois ) {
+			if ( poi.type == "transition" && poi.x == player.position.x && poi.y == player.position.y ) {
+				arguments.state.moduleSlug = poi.payload.targetModule;
+				arguments.state.mapSlug    = poi.payload.targetMap;
+				var newMap = arguments.mapService.getModuleMap( poi.payload.targetModule, poi.payload.targetMap );
+				arguments.state.map      = newMap;
+				arguments.state.gridPois = newMap.pois;
+
+				var spawnOverride = ( structKeyExists( poi.payload, "targetX" ) && structKeyExists( poi.payload, "targetY" ) )
+					? { "x": poi.payload.targetX, "y": poi.payload.targetY }
+					: newMap.playerSpawn;
+				player.position = spawnOverride;
+
+				var spawnPois = newMap.pois.filter( function( p ) { return p.type == "spawn"; } );
+				var opponents = [];
+				var takenPos  = [ player.position ];
+
+				if ( spawnPois.len() == 0 ) {
+					opponents = arguments.combatService.randomMonstersForLevel( player.level, randRange( 2, 3 ) );
+					var positions = arguments.combatService.randomOpenTilesNear( newMap, newMap.opponentSpawn, 5, opponents.len(), takenPos );
+					for ( var i = 1; i <= opponents.len(); i++ ) {
+						opponents[ i ].position = ( i <= positions.len() ) ? positions[ i ] : { "x": newMap.opponentSpawn.x, "y": newMap.opponentSpawn.y };
+						opponents[ i ].mobIndex = i;
+						opponents[ i ].visible  = false;
+					}
+				} else {
+					for ( var spawnPoi in spawnPois ) {
+						var payload    = spawnPoi.payload;
+						var spawnCount = ( payload.countMode == "random" )
+							? randRange( payload.countMin, payload.countMax )
+							: payload.count;
+						if ( spawnCount < 1 ) { continue; }
+						var mobs = [];
+						if ( payload.monsterMode == "specific" && len( payload.monsterName ?: "" ) ) {
+							var tmpl = arguments.combatService.monsterByName( payload.monsterName );
+							for ( var j = 1; j <= spawnCount; j++ ) { mobs.append( duplicate( tmpl ) ); }
+						} else {
+							mobs = arguments.combatService.randomMonstersForLevel( player.level, spawnCount );
+						}
+						var positions = arguments.combatService.randomOpenTilesNear( newMap, { "x": spawnPoi.x, "y": spawnPoi.y }, 5, mobs.len(), takenPos );
+						for ( var k = 1; k <= mobs.len(); k++ ) {
+							mobs[ k ].position = ( k <= positions.len() ) ? positions[ k ] : { "x": spawnPoi.x, "y": spawnPoi.y };
+							mobs[ k ].visible  = false;
+							takenPos.append( mobs[ k ].position );
+							opponents.append( mobs[ k ] );
+						}
+					}
+					if ( opponents.len() == 0 ) {
+						opponents = arguments.combatService.randomMonstersForLevel( player.level, 1 );
+						opponents[ 1 ].position = { "x": spawnPois[ 1 ].x, "y": spawnPois[ 1 ].y };
+						opponents[ 1 ].visible  = false;
+					}
+					for ( var i = 1; i <= opponents.len(); i++ ) { opponents[ i ].mobIndex = i; }
+				}
+				arguments.state.opponents            = opponents;
+				arguments.state.opponent             = opponents[ 1 ];
+				arguments.state.selectedOpponentIndex = 1;
+				arguments.state.initiativeRolled     = false;
+				arguments.state.gameOver             = false;
+				arguments.state.outcome              = "";
+				arguments.state.player.inCombat      = false;
+				arguments.state.mapChanged           = true;
+				arguments.combatService.startNewRound( arguments.state );
+				arguments.state.log.prepend( "#player.name# travels to a new area." );
+				return;
+			}
+		}
+	}
+
+	private function _maybeSaveProgress( state, combatService ) {
+		if ( arguments.state.gameOver && !arguments.state.stateSaved ) {
+			arguments.state.stateSaved = true;
+			arguments.state.player.inCombat = false;
+			arguments.combatService.saveCharacterState( arguments.state.player );
+		}
+	}
+
+	/**
+	 * Only the player fields that changed since the last broadcast, compared
+	 * via per-key JSON serialization against a snapshot kept on the state
+	 * (`_playerSnapshot`, stored as key -> serialized value). A changed key is
+	 * sent whole — top-level granularity, so the client can shallow-merge —
+	 * and the first broadcast of a session (no snapshot yet) sends everything.
+	 */
+	private function _playerDelta( state ) {
+		var lastSent = structKeyExists( arguments.state, "_playerSnapshot" ) ? arguments.state._playerSnapshot : {};
+		var snapshot = {};
+		var delta = {};
+		for ( var key in arguments.state.player ) {
+			var serialized = jsonSerialize( arguments.state.player[ key ] );
+			snapshot[ key ] = serialized;
+			if ( !lastSent.keyExists( key ) || lastSent[ key ] != serialized ) {
+				delta[ key ] = arguments.state.player[ key ];
+			}
+		}
+		arguments.state._playerSnapshot = snapshot;
+		return delta;
+	}
+
+	private function _buildBroadcast( state, combatService ) {
+		var payload = {
+			"type"                  : "state_update",
+			"playerDelta"           : _playerDelta( arguments.state ),
+			"opponents"             : arguments.combatService.opponentsForClient( arguments.state ),
+			"currentTurn"           : arguments.state.currentTurn,
+			"round"                 : arguments.state.round,
+			"movementRemaining"     : arguments.state.movementRemaining,
+			"actionUsed"            : arguments.state.actionUsed,
+			"bonusActionUsed"       : arguments.state.bonusActionUsed,
+			"attacksUsedThisTurn"   : arguments.state.attacksUsedThisTurn,
+			"gameOver"              : arguments.state.gameOver,
+			"outcome"               : arguments.state.outcome,
+			"log"                   : arguments.state.log.len() > 50 ? arraySlice( arguments.state.log, 1, 50 ) : arguments.state.log,
+			"initiativeRolled"      : arguments.state.initiativeRolled,
+			"selectedOpponentIndex" : arguments.state.selectedOpponentIndex,
+			"items"                 : arguments.state.items,
+			"autoBattling"          : arguments.state.autoBattling,
+			"gridPois"              : arguments.state.gridPois,
+			"asiMode"               : arguments.state.asiMode,
+			"asiAbility1"           : arguments.state.asiAbility1,
+			"asiAbility2"           : arguments.state.asiAbility2,
+			"asiSelectedFeat"       : arguments.state.asiSelectedFeat,
+			"asiSelectedSkills"     : arguments.state.asiSelectedSkills,
+			"mapPois"               : arguments.state.gridPois
+		};
+		// The map grid is static per map and already cached client-side from
+		// the initial /api/combat.bxm load — resend it only right after a map
+		// transition (the one time it actually changes), instead of shipping
+		// two 128x128 arrays with every state_update. The client only applies
+		// map fields when `mapTiles` is present.
+		if ( structKeyExists( arguments.state, "mapChanged" ) && arguments.state.mapChanged ) {
+			arguments.state.mapChanged = false;
+			payload[ "mapWidth" ]       = arguments.state.map.width;
+			payload[ "mapHeight" ]      = arguments.state.map.height;
+			payload[ "mapTiles" ]       = arguments.state.map.tiles;
+			payload[ "mapDecorations" ] = arguments.state.map.decorations;
+		}
+		return payload;
+	}
+
+}

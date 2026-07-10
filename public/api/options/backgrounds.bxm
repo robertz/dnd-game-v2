@@ -1,0 +1,16 @@
+<bx:header name="Content-Type" value="application/json">
+<bx:script>
+
+	characterService = new models.CharacterService();
+	names = characterService.listBackgroundOptions();
+	result = [];
+
+	for ( name in names ) {
+		result.append( {
+			"name"  : name,
+			"detail": characterService.getBackgroundDetail( name )
+		} );
+	}
+
+	writeOutput( jsonSerialize( result ) );
+</bx:script>

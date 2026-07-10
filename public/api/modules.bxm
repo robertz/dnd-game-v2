@@ -1,0 +1,23 @@
+<bx:header name="Content-Type" value="application/json">
+<bx:script>
+
+	mapService = new models.MapService();
+	rows = mapService.listModules();
+	result = [];
+
+	for ( row in rows ) {
+		try {
+			entryMapSlug = mapService.getEntryMapSlug( row.slug );
+		} catch ( e ) {
+			entryMapSlug = "";
+		}
+		result.append( {
+			"slug"         : row.slug,
+			"name"         : row.name,
+			"description"  : row.description,
+			"entryMapSlug" : entryMapSlug
+		} );
+	}
+
+	writeOutput( jsonSerialize( result ) );
+</bx:script>

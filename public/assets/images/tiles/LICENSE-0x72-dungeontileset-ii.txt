@@ -1,0 +1,27 @@
+DungeonTileset II by 0x72, v1.7, released under CC0 1.0 Universal (public domain) —
+"You can use this tileset for whatever you like. Credit is not necessary."
+Original source: https://0x72.itch.io/dungeontileset-ii
+
+The *-0x72ii.png files are individual pre-cropped 16x16 (door.png is 32x32)
+frames taken directly from that release's frames/ folder, picked to match
+this app's existing tile-<name> CSS classes (see public/css/game.css):
+
+  wall-0x72ii.png            <- frames/wall_mid.png
+  wall-corner-tl-0x72ii.png  <- frames/wall_outer_top_left.png
+  wall-corner-tr-0x72ii.png  <- frames/wall_outer_top_right.png
+  wall-corner-bl-0x72ii.png  <- frames/wall_outer_front_left.png
+  wall-corner-br-0x72ii.png  <- frames/wall_outer_front_right.png
+  wall-top-0x72ii.png        <- frames/wall_top_mid.png
+  wall-bottom-0x72ii.png     <- frames/wall_mid.png (no distinct front-facing piece in this pack)
+  wall-edge-l-0x72ii.png     <- frames/wall_edge_left.png
+  wall-edge-r-0x72ii.png     <- frames/wall_edge_right.png
+  floor-0x72ii.png           <- frames/floor_1.png
+  door-0x72ii.png            <- frames/doors_leaf_closed.png
+  chest-0x72ii.png           <- frames/chest_full_open_anim_f0.png
+  banner-0x72ii.png          <- frames/wall_banner_red.png
+  spikes-0x72ii.png          <- frames/floor_spikes_anim_f3.png
+
+This pack has no torch, pillar, rubble, crystal, or outdoor-terrain
+(sand/grass/road/water/forest/mountain) equivalents, so those tile classes
+still point at the older kenney/0x72 SVG art — see LICENSE-0x72.txt and
+LICENSE-kenney-tinydungeon.txt.

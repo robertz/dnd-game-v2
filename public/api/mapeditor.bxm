@@ -1,0 +1,57 @@
+<bx:header name="Content-Type" value="application/json">
+<bx:script>
+
+	mapService = new models.MapService();
+	combatService = new models.CombatService();
+
+	if ( cgi.request_method == "GET" ) {
+		listFlag = url.list ?: "";
+		if ( listFlag == "1" ) {
+			options = [];
+			moduleRows = mapService.listModules();
+			for ( i = 1; i <= moduleRows.recordCount; i++ ) {
+				mapRows = mapService.listMapsForModule( moduleRows.slug[ i ] );
+				for ( j = 1; j <= mapRows.recordCount; j++ ) {
+					options.append( {
+						"value": moduleRows.slug[ i ] & "::" & mapRows.slug[ j ],
+						"label": moduleRows.name[ i ] & " / " & mapRows.name[ j ]
+					} );
+				}
+			}
+			writeOutput( jsonSerialize( { "maps": options, "monsters": combatService.listAllMonsterNames() } ) );
+			return;
+		}
+
+		moduleSlug = url.moduleSlug ?: "";
+		mapSlug = url.mapSlug    ?: "";
+		if ( !len( moduleSlug ) || !len( mapSlug ) ) {
+			writeOutput( jsonSerialize( { "error": "moduleSlug and mapSlug required" } ) );
+			return;
+		}
+		writeOutput( jsonSerialize( mapService.loadEditorMap( moduleSlug, mapSlug ) ) );
+		return;
+	}
+
+	if ( cgi.request_method == "POST" ) {
+		body = jsonDeserialize( getHttpRequestData().content );
+
+		mapService.saveEditorMap(
+			moduleSlug        = body.moduleSlug,
+			moduleName        = body.moduleName,
+			moduleDescription = body.moduleDescription ?: "",
+			mapSlug           = body.mapSlug,
+			mapName           = body.mapName,
+			width             = body.width,
+			height            = body.height,
+			chunkSize         = body.chunkSize ?: 32,
+			grid              = body.grid,
+			playerSpawn       = body.playerSpawn,
+			opponentSpawn     = { "x": body.spawnPoints[ 1 ].x, "y": body.spawnPoints[ 1 ].y },
+			transitions       = body.transitions ?: [],
+			spawnPoints       = body.spawnPoints,
+			isEntry           = body.isEntryMap ?: false
+		);
+
+		writeOutput( jsonSerialize( { "ok": true, "message": "Saved '#body.mapName#' to module '#body.moduleName#'." } ) );
+	}
+</bx:script>

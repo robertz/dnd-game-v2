@@ -1,0 +1,5 @@
+<bx:header name="Content-Type" value="application/json">
+<bx:script>
+	combatService = new models.CombatService();
+	writeOutput( jsonSerialize( combatService.listAllMonsterNames() ) );
+</bx:script>

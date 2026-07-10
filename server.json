@@ -1,0 +1,25 @@
+{
+    "name":"dnd-game-v2",
+    "app":{
+        "cfengine":"boxlang@1",
+        "engineConfigFile":"./runtime/boxlang.json"
+    },
+    "jvm":{
+        "heapSize":"1024",
+        "javaVersion":"openjdk21_jre"
+    },
+    "web":{
+        "webroot":"public",
+        "rewrites":{
+            "enable":true
+        },
+        "websocket":{
+            "enable":true,
+            "uri":"/ws",
+            "listener":"/WebSocket.bx"
+        }
+    },
+    "scripts":{
+        "onServerInitialInstall":"install bx-mysql"
+    }
+}

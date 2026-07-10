@@ -1,0 +1,1149 @@
+/**
+ * Level definitions for the grid encounter — separate from CombatService (the
+ * rules engine) since "what a level looks like" is content, not mechanics.
+ *
+ * A level is authored as an ASCII grid (an array of equal-length row strings)
+ * plus explicit spawn points, then parsed into the `{width, height, tiles,
+ * decorations, playerSpawn, opponentSpawn}` struct the rest of the app
+ * consumes. Both `tiles` and `decorations` are indexed `[row][col]` (row = y,
+ * col = x, both 1-based), matching the grid-rendering loop's `row`/`col`
+ * order in default.bxm.
+ *
+ * `tiles` holds only `"wall"` or `"floor"` — the two values CombatService's
+ * pathfinding/line-of-sight logic actually cares about. `decorations` is a
+ * separate, purely cosmetic layer (which specific art a cell renders with,
+ * e.g. a torch-lit wall vs. a plain one) so adding more dungeon dressing never
+ * risks changing walkability. The ASCII legend:
+ *   `#` wall (plain)         `.` floor (plain)
+ *   `^` wall + torch         `O` wall + pillar (still blocks movement/sight)
+ *   `D` floor + door         `x` floor + spikes (hazard flavor only, no trap logic yet)
+ *   `c` floor + chest        `b` floor + rubble (cosmetic only)
+ *   `n` wall + banner (still blocks movement/sight)
+ *   `y` floor + crystal (cosmetic only)
+ */
+class singleton {
+
+	// Maps an ASCII legend character to its {tile, decoration} meaning.
+	// Anything not listed here is treated as plain "#" (wall) or "." (floor).
+	TILE_LEGEND = {
+		"##": { "tile": "wall", "decoration": "" },
+		".": { "tile": "floor", "decoration": "" },
+		"^": { "tile": "wall", "decoration": "torch" },
+		"O": { "tile": "wall", "decoration": "pillar" },
+		"D": { "tile": "floor", "decoration": "door" },
+		"x": { "tile": "floor", "decoration": "spikes" },
+		"c": { "tile": "floor", "decoration": "chest" },
+		"b": { "tile": "floor", "decoration": "rubble" },
+		"n": { "tile": "wall", "decoration": "banner" },
+		"y": { "tile": "floor", "decoration": "crystal" },
+		// Outdoor terrain, used by database-backed adventure module maps
+		// (see getModuleMap/getModuleMapViewport below) alongside the
+		// dungeon symbols above.
+		"g": { "tile": "floor", "decoration": "grass" },
+		"r": { "tile": "floor", "decoration": "road" },
+		"t": { "tile": "wall", "decoration": "forest" },
+		"m": { "tile": "wall", "decoration": "mountain" },
+		"w": { "tile": "wall", "decoration": "water" },
+		"s": { "tile": "floor", "decoration": "sand" }
+	};
+
+	// Cache of fully-decoded static level geometry (tiles/decorations/
+	// spawns), keyed "moduleSlug|mapSlug" — see getModuleMap()'s doc
+	// comment. This service is a WireBox singleton, so the cache lives for
+	// the application's lifetime (cleared on ?fwreinit=1, same as any other
+	// in-memory singleton state), not just one request.
+	_gridGeometryCache = {};
+
+	// Cache of a map's POI rows (loot/transition/spawn/encounter), keyed by
+	// mapId — see getModuleMap()'s doc comment on why this exists separately
+	// from _gridGeometryCache. Invalidated in deletePoiAt() (loot pickup)
+	// and saveEditorMap() (editor save), the only two places POI rows change.
+	_poiCache = {};
+
+	// Cache of parsed hard-coded ASCII levels, keyed by level name — the
+	// parse (and its _buildTileClassGrid() pass) is pure computation over
+	// static content, so there's no reason to redo it per request the way
+	// getLevel() originally did. Never invalidated: the levels only change
+	// with a code deploy, which restarts the runtime anyway.
+	_asciiLevelCache = {};
+
+	/**
+	 * Returns the named level, parsed and ready to use. Falls back to
+	 * "openField" (a plain walls-free room) for an unknown name, so callers
+	 * never have to null-check.
+	 *
+	 * @name The level's name (see LEVELS below).
+	 */
+	function getLevel( name ) {
+		var levels = _levels();
+		var levelName = levels.keyExists( arguments.name ) ? arguments.name : "openField";
+		if ( !_asciiLevelCache.keyExists( levelName ) ) {
+			var definition = levels[ levelName ];
+			_asciiLevelCache[ levelName ] = _parseAsciiLevel( definition.rows, definition.playerSpawn, definition.opponentSpawn );
+		}
+		// Fresh wrapper struct per call, same as getModuleMap() — callers
+		// assign onto the returned struct (default.bx's _grid() sets .pois),
+		// which must never write through to the shared cache entry. The big
+		// inner arrays (tiles/decorations/tileClasses) are safely shared
+		// because nothing mutates them after parse.
+		var parsed = _asciiLevelCache[ levelName ];
+		return {
+			"width": parsed.width,
+			"height": parsed.height,
+			"tiles": parsed.tiles,
+			"decorations": parsed.decorations,
+			"tileClasses": parsed.tileClasses,
+			"playerSpawn": { "x": parsed.playerSpawn.x, "y": parsed.playerSpawn.y },
+			"opponentSpawn": { "x": parsed.opponentSpawn.x, "y": parsed.opponentSpawn.y },
+			"pois": []
+		};
+	}
+
+	/**
+	 * Lists every installed adventure module, for the module-select screen.
+	 */
+	function listModules() {
+		return queryExecute(
+			"SELECT slug, name, description FROM adventure_modules ORDER BY name",
+			{},
+			{ datasource: "gameserver" }
+		);
+	}
+
+	/**
+	 * Lists the maps belonging to one adventure module — used by the map
+	 * editor's "load an existing map" picker. Not used by the player-facing
+	 * module-select screen, which only ever enters a module's designated
+	 * entry map (see getEntryMapSlug()); other maps are reached in-game via
+	 * transitions.
+	 *
+	 * @moduleSlug Adventure module slug.
+	 */
+	function listMapsForModule( moduleSlug ) {
+		return queryExecute(
+			"SELECT m.slug, m.name, m.width, m.height
+			 FROM adventure_maps m
+			 INNER JOIN adventure_modules am ON am.id = m.module_id
+			 WHERE am.slug = :moduleSlug
+			 ORDER BY m.name",
+			{ "moduleSlug": arguments.moduleSlug },
+			{ datasource: "gameserver" }
+		);
+	}
+
+	/**
+	 * Returns the slug of a module's designated entry map (adventure_maps.
+	 * is_entry) — the one the module/map picker (moduleSelect.bx) sends the
+	 * player straight into. Falls back to the module's first-created map
+	 * (lowest id) if none is explicitly flagged, so a module never has zero
+	 * viable entry points.
+	 *
+	 * @moduleSlug Adventure module slug.
+	 */
+	function getEntryMapSlug( moduleSlug ) {
+		var rows = queryExecute(
+			"SELECT m.slug
+			 FROM adventure_maps m
+			 INNER JOIN adventure_modules am ON am.id = m.module_id
+			 WHERE am.slug = :moduleSlug
+			 ORDER BY m.is_entry DESC, m.id ASC
+			 LIMIT 1",
+			{ "moduleSlug": arguments.moduleSlug },
+			{ datasource: "gameserver" }
+		);
+		if ( rows.recordCount == 0 ) {
+			throw( type = "MapNotFound", message = "Module '#arguments.moduleSlug#' has no maps." );
+		}
+		return rows.slug[ 1 ];
+	}
+
+	/**
+	 * Exposes TILE_LEGEND (symbol -> {tile, decoration}) so callers like the
+	 * map editor (mapEditor.bx) can build a brush palette and a per-map
+	 * tile_legend JSON column from the same source of truth
+	 * _parseAsciiLevel() uses, instead of duplicating the symbol list.
+	 */
+	function tileLegend() {
+		return TILE_LEGEND;
+	}
+
+	/**
+	 * Picks which of the 8 wall-autotile pieces (see
+	 * LICENSE-kenney-tinydungeon.txt) a plain wall cell — one with no
+	 * torch/pillar/banner decoration — should render as, so a room's outer
+	 * boundary gets real corners/edges instead of one repeated wall tile.
+	 * Decorated walls never call this; default.bxm/mapEditor.bxm only fall
+	 * back to it when `decoration` is empty. Shared by wallAutotileClass()
+	 * (decoded {tiles} grids) and wallAutotileClassForSymbols() (the map
+	 * editor's raw ASCII-symbol grid) via the `isWallAt` callback, since
+	 * "is this neighboring cell a wall" is the only thing that differs
+	 * between those two grid shapes.
+	 *
+	 * Classic 8-neighbor blob-autotile check: a cell is an outer *corner*
+	 * when its two orthogonal neighbors on one side are still wall but the
+	 * diagonal between them opens onto floor (e.g. E and S are wall but SE
+	 * is floor — floor is peeking in from the corner, not from a straight
+	 * side). Failing that, it's a straight *edge* when exactly one direct
+	 * orthogonal neighbor is floor. Anything else (fully walled in, or a
+	 * T-junction/cross this small frame set has no piece for) returns ""
+	 * so the caller falls back to the plain wall-0x72 tile.
+	 */
+	private function _wallAutotileClass( x, y, isWallAt ) {
+		var n = arguments.isWallAt( arguments.x, arguments.y - 1 );
+		var s = arguments.isWallAt( arguments.x, arguments.y + 1 );
+		var e = arguments.isWallAt( arguments.x + 1, arguments.y );
+		var w = arguments.isWallAt( arguments.x - 1, arguments.y );
+		var ne = arguments.isWallAt( arguments.x + 1, arguments.y - 1 );
+		var nw = arguments.isWallAt( arguments.x - 1, arguments.y - 1 );
+		var se = arguments.isWallAt( arguments.x + 1, arguments.y + 1 );
+		var sw = arguments.isWallAt( arguments.x - 1, arguments.y + 1 );
+
+		if ( e && s && !se ) return "wall-corner-tl";
+		if ( w && s && !sw ) return "wall-corner-tr";
+		if ( e && n && !ne ) return "wall-corner-bl";
+		if ( w && n && !nw ) return "wall-corner-br";
+		if ( !s ) return "wall-top";
+		if ( !n ) return "wall-bottom";
+		if ( !e ) return "wall-edge-l";
+		if ( !w ) return "wall-edge-r";
+		return "";
+	}
+
+	/**
+	 * _wallAutotileClass() for a decoded {width, height, tiles, ...} grid
+	 * (see _parseAsciiLevel()'s doc comment) — `tiles` is `[row][col]`,
+	 * 1-based. Consumed by _buildTileClassGrid(), which bakes the result
+	 * into each cached grid's `tileClasses` once per decode; default.bxm
+	 * reads that precomputed grid rather than calling this per tile per
+	 * render (441 tiles x 8 neighbor closure calls on every request).
+	 *
+	 * @grid The decoded grid struct.
+	 * @x Column (1-based).
+	 * @y Row (1-based).
+	 */
+	function wallAutotileClass( grid, x, y ) {
+		var g = arguments.grid;
+		if ( g.tiles[ arguments.y ][ arguments.x ] != "wall" ) {
+			return "";
+		}
+		var isWallAt = function( cx, cy ) {
+			if ( cx < 1 || cy < 1 || cx > g.width || cy > g.height ) {
+				return true;
+			}
+			return g.tiles[ cy ][ cx ] == "wall";
+		};
+		return _wallAutotileClass( arguments.x, arguments.y, isWallAt );
+	}
+
+	/**
+	 * Precomputes the base CSS class fragment for every cell of a decoded
+	 * grid — exactly the decoration-wins / autotile / plain-wall / bare-floor
+	 * decision default.bxm used to make per tile on every render, done once
+	 * per decode instead (the inputs are static map geometry, so the answer
+	 * never changes at play time). Values are either "" (bare floor) or a
+	 * leading-space class like " tile-torch" / " tile-wall-corner-tl" /
+	 * " tile-wall", ready to concatenate straight into the tile's class
+	 * attribute. Baked into the cached geometry as `tileClasses[row][col]`
+	 * by _decodeMapGeometry() and _parseAsciiLevel().
+	 */
+	private function _buildTileClassGrid( tiles, decorations, width, height ) {
+		var gridView = { "tiles": arguments.tiles, "width": arguments.width, "height": arguments.height };
+		var classes = [];
+		for ( var y = 1; y <= arguments.height; y++ ) {
+			var classRow = [];
+			for ( var x = 1; x <= arguments.width; x++ ) {
+				var decoration = arguments.decorations[ y ][ x ];
+				if ( len( decoration ) ) {
+					arrayAppend( classRow, " tile-" & decoration );
+				} else if ( arguments.tiles[ y ][ x ] == "wall" ) {
+					var autotile = wallAutotileClass( gridView, x, y );
+					arrayAppend( classRow, len( autotile ) ? ( " tile-" & autotile ) : " tile-wall" );
+				} else {
+					arrayAppend( classRow, "" );
+				}
+			}
+			arrayAppend( classes, classRow );
+		}
+		return classes;
+	}
+
+	/**
+	 * _wallAutotileClass() for the map editor's raw ASCII-symbol grid
+	 * (`[row][col]` of single-character TILE_LEGEND symbols, 1-based) —
+	 * used before a map has ever been saved/parsed into a decoded grid.
+	 * Still called live per tile per render (unlike the play-time grid's
+	 * precomputed tileClasses) because the editor's grid changes with
+	 * every brush stroke.
+	 *
+	 * @grid The raw symbol grid.
+	 * @width Grid width.
+	 * @height Grid height.
+	 * @x Column (1-based).
+	 * @y Row (1-based).
+	 */
+	function wallAutotileClassForSymbols( grid, width, height, x, y ) {
+		var g = arguments.grid;
+		var w = arguments.width;
+		var h = arguments.height;
+		var legend = TILE_LEGEND;
+		var isWallAt = function( cx, cy ) {
+			if ( cx < 1 || cy < 1 || cx > w || cy > h ) {
+				return true;
+			}
+			var sym = g[ cy ][ cx ];
+			var meaning = legend.keyExists( sym ) ? legend[ sym ] : legend[ "." ];
+			return meaning.tile == "wall";
+		};
+		return _wallAutotileClass( arguments.x, arguments.y, isWallAt );
+	}
+
+	/**
+	 * Creates or updates an adventure module and one of its maps from the
+	 * map editor: upserts the module and map metadata (matched by slug),
+	 * then replaces the map's chunks wholesale by RLE-encoding `grid` —
+	 * simpler and safer than diffing/patching existing chunk rows, since
+	 * the editor always has the full authored grid in memory anyway.
+	 *
+	 * @grid A `height` x `width` array of single-character TILE_LEGEND
+	 *  symbols, row-major, 1-based like every other grid in this app.
+	 * @playerSpawn `{x, y}` — should land on a floor tile (not validated
+	 *  here; the editor is expected to check before calling this).
+	 * @opponentSpawn `{x, y}` — same caveat as playerSpawn.
+	 * @transitions Array of `{x, y, targetModule, targetMap}` — map-to-map
+	 *  links, persisted as `adventure_map_pois` rows with poi_type
+	 *  "transition". Replaces every existing transition POI on this map
+	 *  (other POI types, e.g. "encounter", are left untouched).
+	 * @spawnPoints Array of `{x, y, countMode, count, countMin, countMax,
+	 *  monsterMode, monsterName}` — opponent spawn markers, persisted as
+	 *  `adventure_map_pois` rows with poi_type "spawn". Replaces every
+	 *  existing spawn POI on this map. countMode is "fixed" (use `count`)
+	 *  or "random" (use `countMin`/`countMax`); monsterMode is "random"
+	 *  (level-appropriate draw, see CombatService.randomMonstersForLevel())
+	 *  or "specific" (use `monsterName`, see CombatService.monsterByName()).
+	 *  See default.bx's _enterMap()/_buildInitialRoster() for how these are
+	 *  consumed at map-entry time.
+	 * @isEntry If true, marks this map as its module's entry point (see
+	 *  getEntryMapSlug()) — clearing the flag on every other map in the
+	 *  module first, so only one map per module is ever the entry. Leaving
+	 *  this false does NOT clear an existing entry map; it just leaves this
+	 *  map as a non-entry (transition-only-reachable) one.
+	 */
+	function saveEditorMap( moduleSlug, moduleName, moduleDescription, mapSlug, mapName, width, height, chunkSize, grid, playerSpawn, opponentSpawn, transitions = [], spawnPoints = [], isEntry = false ) {
+		var moduleId = _upsertModule( arguments.moduleSlug, arguments.moduleName, arguments.moduleDescription );
+		var mapId = _upsertMap(
+			moduleId, arguments.mapSlug, arguments.mapName, arguments.width, arguments.height,
+			arguments.chunkSize, arguments.playerSpawn, arguments.opponentSpawn
+		);
+
+		if ( arguments.isEntry ) {
+			queryExecute( "UPDATE adventure_maps SET is_entry = 0 WHERE module_id = :moduleId", { "moduleId": moduleId }, { datasource: "gameserver" } );
+			queryExecute( "UPDATE adventure_maps SET is_entry = 1 WHERE id = :mapId", { "mapId": mapId }, { datasource: "gameserver" } );
+		}
+
+		queryExecute( "DELETE FROM adventure_map_chunks WHERE map_id = :mapId", { "mapId": mapId }, { datasource: "gameserver" } );
+
+		var chunksX = ceiling( arguments.width / arguments.chunkSize );
+		var chunksY = ceiling( arguments.height / arguments.chunkSize );
+		for ( var cy = 0; cy < chunksY; cy++ ) {
+			for ( var cx = 0; cx < chunksX; cx++ ) {
+				var rowStart = cy * arguments.chunkSize + 1;
+				var rowEnd = min( arguments.height, rowStart + arguments.chunkSize - 1 );
+				var colStart = cx * arguments.chunkSize + 1;
+				var colEnd = min( arguments.width, colStart + arguments.chunkSize - 1 );
+				var lines = [];
+				for ( var y = rowStart; y <= rowEnd; y++ ) {
+					var rowText = "";
+					for ( var x = colStart; x <= colEnd; x++ ) {
+						rowText &= arguments.grid[ y ][ x ];
+					}
+					arrayAppend( lines, _encodeRLE( rowText ) );
+				}
+				queryExecute(
+					"INSERT INTO adventure_map_chunks (map_id, chunk_x, chunk_y, row_data) VALUES (:mapId, :chunkX, :chunkY, :rowData)",
+					{ "mapId": mapId, "chunkX": cx, "chunkY": cy, "rowData": arrayToList( lines, char( 10 ) ) },
+					{ datasource: "gameserver" }
+				);
+			}
+		}
+
+		// The chunks on disk just changed — drop getModuleMap()'s cached
+		// decode (if any) so the next map entry re-decodes instead of
+		// serving the pre-edit geometry. The transition/spawn POI rows
+		// below are about to change too, so drop _loadPois()'s cache for
+		// this map as well (deletePoiAt() invalidates it for loot pickups;
+		// this is the editor-save counterpart).
+		_gridGeometryCache.delete( arguments.moduleSlug & "|" & arguments.mapSlug );
+		_poiCache.delete( mapId );
+
+		queryExecute(
+			"DELETE FROM adventure_map_pois WHERE map_id = :mapId AND poi_type = 'transition'",
+			{ "mapId": mapId },
+			{ datasource: "gameserver" }
+		);
+		for ( var t in arguments.transitions ) {
+			queryExecute(
+				"INSERT INTO adventure_map_pois (map_id, x, y, poi_type, payload) VALUES (:mapId, :x, :y, 'transition', :payload)",
+				{
+					"mapId": mapId, "x": t.x, "y": t.y,
+					"payload": JSONSerialize( { "targetModule": t.targetModule, "targetMap": t.targetMap } )
+				},
+				{ datasource: "gameserver" }
+			);
+		}
+
+		queryExecute(
+			"DELETE FROM adventure_map_pois WHERE map_id = :mapId AND poi_type = 'spawn'",
+			{ "mapId": mapId },
+			{ datasource: "gameserver" }
+		);
+		for ( var s in arguments.spawnPoints ) {
+			queryExecute(
+				"INSERT INTO adventure_map_pois (map_id, x, y, poi_type, payload) VALUES (:mapId, :x, :y, 'spawn', :payload)",
+				{
+					"mapId": mapId, "x": s.x, "y": s.y,
+					"payload": JSONSerialize( {
+						"countMode": s.countMode, "count": s.count, "countMin": s.countMin, "countMax": s.countMax,
+						"monsterMode": s.monsterMode, "monsterName": s.monsterName
+					} )
+				},
+				{ datasource: "gameserver" }
+			);
+		}
+
+		return { "moduleSlug": arguments.moduleSlug, "mapSlug": arguments.mapSlug };
+	}
+
+	/**
+	 * Inserts a new adventure module, or updates name/description if the
+	 * slug already exists. Returns the module's id either way.
+	 */
+	private function _upsertModule( slug, name, description ) {
+		var existing = queryExecute(
+			"SELECT id FROM adventure_modules WHERE slug = :slug",
+			{ "slug": arguments.slug },
+			{ datasource: "gameserver" }
+		);
+		if ( existing.recordCount ) {
+			queryExecute(
+				"UPDATE adventure_modules SET name = :name, description = :description WHERE id = :id",
+				{ "name": arguments.name, "description": arguments.description, "id": existing.id[ 1 ] },
+				{ datasource: "gameserver" }
+			);
+			return existing.id[ 1 ];
+		}
+		queryExecute(
+			"INSERT INTO adventure_modules (slug, name, description) VALUES (:slug, :name, :description)",
+			{ "slug": arguments.slug, "name": arguments.name, "description": arguments.description },
+			{ datasource: "gameserver" }
+		);
+		var inserted = queryExecute(
+			"SELECT id FROM adventure_modules WHERE slug = :slug",
+			{ "slug": arguments.slug },
+			{ datasource: "gameserver" }
+		);
+		return inserted.id[ 1 ];
+	}
+
+	/**
+	 * Inserts a new adventure map under `moduleId`, or updates its metadata
+	 * if a map with `mapSlug` already exists in that module. The
+	 * tile_legend column is always written as this class's own TILE_LEGEND,
+	 * JSON-encoded — the editor only ever produces symbols from that fixed
+	 * palette. Returns the map's id either way.
+	 */
+	private function _upsertMap( moduleId, mapSlug, mapName, width, height, chunkSize, playerSpawn, opponentSpawn ) {
+		var legendJSON = JSONSerialize( TILE_LEGEND );
+		var existing = queryExecute(
+			"SELECT id FROM adventure_maps WHERE module_id = :moduleId AND slug = :slug",
+			{ "moduleId": arguments.moduleId, "slug": arguments.mapSlug },
+			{ datasource: "gameserver" }
+		);
+		if ( existing.recordCount ) {
+			queryExecute(
+				"UPDATE adventure_maps
+				 SET name = :name, width = :width, height = :height, chunk_size = :chunkSize, tile_legend = :legend,
+				     player_spawn_x = :psx, player_spawn_y = :psy, opponent_spawn_x = :osx, opponent_spawn_y = :osy
+				 WHERE id = :id",
+				{
+					"name": arguments.mapName, "width": arguments.width, "height": arguments.height,
+					"chunkSize": arguments.chunkSize, "legend": legendJSON,
+					"psx": arguments.playerSpawn.x, "psy": arguments.playerSpawn.y,
+					"osx": arguments.opponentSpawn.x, "osy": arguments.opponentSpawn.y,
+					"id": existing.id[ 1 ]
+				},
+				{ datasource: "gameserver" }
+			);
+			return existing.id[ 1 ];
+		}
+		queryExecute(
+			"INSERT INTO adventure_maps
+			    (module_id, slug, name, width, height, chunk_size, tile_legend, player_spawn_x, player_spawn_y, opponent_spawn_x, opponent_spawn_y)
+			 VALUES (:moduleId, :slug, :name, :width, :height, :chunkSize, :legend, :psx, :psy, :osx, :osy)",
+			{
+				"moduleId": arguments.moduleId, "slug": arguments.mapSlug, "name": arguments.mapName,
+				"width": arguments.width, "height": arguments.height, "chunkSize": arguments.chunkSize,
+				"legend": legendJSON, "psx": arguments.playerSpawn.x, "psy": arguments.playerSpawn.y,
+				"osx": arguments.opponentSpawn.x, "osy": arguments.opponentSpawn.y
+			},
+			{ datasource: "gameserver" }
+		);
+		var inserted = queryExecute(
+			"SELECT id FROM adventure_maps WHERE module_id = :moduleId AND slug = :slug",
+			{ "moduleId": arguments.moduleId, "slug": arguments.mapSlug },
+			{ datasource: "gameserver" }
+		);
+		return inserted.id[ 1 ];
+	}
+
+	/**
+	 * Loads a previously saved adventure map back into the map editor's raw
+	 * symbol-grid representation — unlike getModuleMap(), which decodes
+	 * into the {tiles, decorations} shape combat plays against, this keeps
+	 * the original TILE_LEGEND symbols so mapEditor.bx can let you keep
+	 * painting where you left off.
+	 *
+	 * @moduleSlug Adventure module slug.
+	 * @mapSlug Map slug within that module.
+	 */
+	function loadEditorMap( moduleSlug, mapSlug ) {
+		var rows = queryExecute(
+			"SELECT am.slug AS moduleSlug, am.name AS moduleName, am.description AS moduleDescription,
+			        m.id, m.slug AS mapSlug, m.name AS mapName, m.width, m.height, m.chunk_size, m.is_entry,
+			        m.player_spawn_x, m.player_spawn_y, m.opponent_spawn_x, m.opponent_spawn_y
+			 FROM adventure_maps m
+			 INNER JOIN adventure_modules am ON am.id = m.module_id
+			 WHERE am.slug = :moduleSlug AND m.slug = :mapSlug",
+			{ "moduleSlug": arguments.moduleSlug, "mapSlug": arguments.mapSlug },
+			{ datasource: "gameserver" }
+		);
+		if ( rows.recordCount == 0 ) {
+			throw( type = "MapNotFound", message = "No map '#arguments.mapSlug#' in module '#arguments.moduleSlug#'." );
+		}
+
+		var width = rows.width[ 1 ];
+		var height = rows.height[ 1 ];
+		var chunkSize = rows.chunk_size[ 1 ];
+		var grid = _buildSymbolGrid( width, height );
+
+		var chunkRows = queryExecute(
+			"SELECT chunk_x, chunk_y, row_data FROM adventure_map_chunks WHERE map_id = :mapId",
+			{ "mapId": rows.id[ 1 ] },
+			{ datasource: "gameserver" }
+		);
+		for ( var i = 1; i <= chunkRows.recordCount; i++ ) {
+			var lines = listToArray( chunkRows.row_data[ i ], char( 10 ) );
+			var offsetY = chunkRows.chunk_y[ i ] * chunkSize;
+			var offsetX = chunkRows.chunk_x[ i ] * chunkSize;
+			for ( var ly = 1; ly <= lines.len(); ly++ ) {
+				var expanded = _decodeRLE( lines[ ly ] );
+				for ( var lx = 1; lx <= len( expanded ); lx++ ) {
+					grid[ offsetY + ly ][ offsetX + lx ] = mid( expanded, lx, 1 );
+				}
+			}
+		}
+
+		var transitions = [];
+		var poiRows = queryExecute(
+			"SELECT x, y, payload FROM adventure_map_pois WHERE map_id = :mapId AND poi_type = 'transition'",
+			{ "mapId": rows.id[ 1 ] },
+			{ datasource: "gameserver" }
+		);
+		for ( var i = 1; i <= poiRows.recordCount; i++ ) {
+			var payload = len( poiRows.payload[ i ] ) ? JSONDeserialize( poiRows.payload[ i ] ) : {};
+			arrayAppend( transitions, {
+				"x": poiRows.x[ i ], "y": poiRows.y[ i ],
+				"targetModule": payload.keyExists( "targetModule" ) ? payload.targetModule : "",
+				"targetMap": payload.keyExists( "targetMap" ) ? payload.targetMap : ""
+			} );
+		}
+
+		var spawnPoints = [];
+		var spawnRows = queryExecute(
+			"SELECT x, y, payload FROM adventure_map_pois WHERE map_id = :mapId AND poi_type = 'spawn'",
+			{ "mapId": rows.id[ 1 ] },
+			{ datasource: "gameserver" }
+		);
+		for ( var i = 1; i <= spawnRows.recordCount; i++ ) {
+			var payload = len( spawnRows.payload[ i ] ) ? JSONDeserialize( spawnRows.payload[ i ] ) : {};
+			arrayAppend( spawnPoints, {
+				"x": spawnRows.x[ i ], "y": spawnRows.y[ i ],
+				"countMode": payload.keyExists( "countMode" ) ? payload.countMode : "fixed",
+				"count": payload.keyExists( "count" ) ? payload.count : 1,
+				"countMin": payload.keyExists( "countMin" ) ? payload.countMin : 1,
+				"countMax": payload.keyExists( "countMax" ) ? payload.countMax : 1,
+				"monsterMode": payload.keyExists( "monsterMode" ) ? payload.monsterMode : "random",
+				"monsterName": payload.keyExists( "monsterName" ) ? payload.monsterName : ""
+			} );
+		}
+
+		return {
+			"moduleSlug": rows.moduleSlug[ 1 ],
+			"moduleName": rows.moduleName[ 1 ],
+			"moduleDescription": rows.moduleDescription[ 1 ],
+			"mapSlug": rows.mapSlug[ 1 ],
+			"mapName": rows.mapName[ 1 ],
+			"width": width,
+			"height": height,
+			"chunkSize": chunkSize,
+			"grid": grid,
+			"playerSpawn": { "x": rows.player_spawn_x[ 1 ], "y": rows.player_spawn_y[ 1 ] },
+			"opponentSpawn": { "x": rows.opponent_spawn_x[ 1 ], "y": rows.opponent_spawn_y[ 1 ] },
+			"transitions": transitions,
+			"spawnPoints": spawnPoints,
+			"isEntry": rows.is_entry[ 1 ] == 1
+		};
+	}
+
+	/**
+	 * Builds a width x height grid filled with the default floor symbol —
+	 * used by loadEditorMap() as the backing store before chunk data is
+	 * blitted in (guards against a map whose chunks don't fully cover its
+	 * declared dimensions).
+	 */
+	private function _buildSymbolGrid( width, height ) {
+		var grid = [];
+		for ( var y = 1; y <= arguments.height; y++ ) {
+			var row = [];
+			for ( var x = 1; x <= arguments.width; x++ ) {
+				arrayAppend( row, "." );
+			}
+			arrayAppend( grid, row );
+		}
+		return grid;
+	}
+
+	/**
+	 * Loads a map from an adventure module by slug, decoding its RLE-
+	 * compressed chunks into the same {width, height, tiles, decorations,
+	 * playerSpawn, opponentSpawn} struct getLevel() returns, so callers
+	 * (the CBWIRE component, CombatService) don't care whether a map came
+	 * from a hardcoded ASCII level or the database.
+	 *
+	 * @moduleSlug Adventure module slug, e.g. "lost-mines".
+	 * @mapSlug Map slug within that module, e.g. "trade-road".
+	 */
+	/**
+	 * Returns a module map's full grid, decoding every chunk's RLE data into
+	 * `tiles`/`decorations` the first time this (moduleSlug, mapSlug) pair is
+	 * requested and reusing that decode for every caller after — decoding is
+	 * the same work regardless of who's asking (every player who ever visits
+	 * a given map was independently re-decoding all of its chunks, on every
+	 * single map entry/transition). Safe to share the same tiles/decorations
+	 * arrays across callers because nothing mutates them after _blitChunk()
+	 * builds them here; `pois` is cached separately (see _loadPois()'s
+	 * _poiCache), invalidated in deletePoiAt() (a loot POI is deleted once
+	 * collected) and saveEditorMap(), rather than sharing _gridGeometryCache's
+	 * lifetime directly — POIs and tile geometry change independently. The
+	 * geometry cache itself is invalidated per-map by saveEditorMap() so
+	 * re-saving a map from the editor doesn't leave players seeing a stale
+	 * decode.
+	 */
+	function getModuleMap( moduleSlug, mapSlug ) {
+		var cacheKey = arguments.moduleSlug & "|" & arguments.mapSlug;
+		if ( !_gridGeometryCache.keyExists( cacheKey ) ) {
+			_gridGeometryCache[ cacheKey ] = _decodeMapGeometry( arguments.moduleSlug, arguments.mapSlug );
+		}
+		var geometry = _gridGeometryCache[ cacheKey ];
+
+		return {
+			"width": geometry.width,
+			"height": geometry.height,
+			"tiles": geometry.tiles,
+			"decorations": geometry.decorations,
+			"tileClasses": geometry.tileClasses,
+			"playerSpawn": geometry.playerSpawn,
+			"opponentSpawn": geometry.opponentSpawn,
+			"pois": _loadPois( geometry.mapId )
+		};
+	}
+
+	/**
+	 * Does the actual chunk fetch + RLE decode for getModuleMap() — split
+	 * out so the cache there only has to store/invalidate this static
+	 * geometry, not the whole getModuleMap() return shape (which also
+	 * carries the always-fresh `pois`).
+	 */
+	private function _decodeMapGeometry( moduleSlug, mapSlug ) {
+		var mapRow = _getMapRow( arguments.moduleSlug, arguments.mapSlug );
+		var legend = JSONDeserialize( mapRow.tile_legend[ 1 ] );
+		var width = mapRow.width[ 1 ];
+		var height = mapRow.height[ 1 ];
+		var chunkSize = mapRow.chunk_size[ 1 ];
+
+		var tiles = _emptyGrid( width, height );
+		var decorations = _emptyGrid( width, height );
+
+		var chunkRows = queryExecute(
+			"SELECT chunk_x, chunk_y, row_data FROM adventure_map_chunks WHERE map_id = :mapId",
+			{ "mapId": mapRow.id[ 1 ] },
+			{ datasource: "gameserver" }
+		);
+		for ( var i = 1; i <= chunkRows.recordCount; i++ ) {
+			var decoded = _decodeChunk( chunkRows.row_data[ i ], legend );
+			_blitChunk( tiles, decorations, decoded, chunkRows.chunk_x[ i ], chunkRows.chunk_y[ i ], chunkSize );
+		}
+
+		return {
+			"mapId": mapRow.id[ 1 ],
+			"width": width,
+			"height": height,
+			"tiles": tiles,
+			"decorations": decorations,
+			"tileClasses": _buildTileClassGrid( tiles, decorations, width, height ),
+			"playerSpawn": { "x": mapRow.player_spawn_x[ 1 ], "y": mapRow.player_spawn_y[ 1 ] },
+			"opponentSpawn": { "x": mapRow.opponent_spawn_x[ 1 ], "y": mapRow.opponent_spawn_y[ 1 ] }
+		};
+	}
+
+	/**
+	 * Permanently deletes every POI at (x, y) on a map — used when a loot
+	 * POI is collected (default.bx's _checkLoot()) so it isn't offered
+	 * again on a future visit to the map.
+	 */
+	function deletePoiAt( moduleSlug, mapSlug, x, y ) {
+		var mapRow = _getMapRow( arguments.moduleSlug, arguments.mapSlug );
+		queryExecute(
+			"DELETE FROM adventure_map_pois WHERE map_id = :mapId AND x = :x AND y = :y",
+			{ "mapId": mapRow.id[ 1 ], "x": arguments.x, "y": arguments.y },
+			{ datasource: "gameserver" }
+		);
+		_poiCache.delete( mapRow.id[ 1 ] );
+	}
+
+	/**
+	 * Loads every POI (encounter/loot/NPC/map-transition trigger) attached
+	 * to a map, with `payload` already JSON-deserialized into a struct —
+	 * e.g. default.bx's map-transition check reads
+	 * `poi.payload.targetModule`/`poi.payload.targetMap` directly rather
+	 * than re-parsing JSON on every move. Cached per mapId (see _poiCache)
+	 * since getModuleMap() calls this on every request for the lifetime of
+	 * an encounter — without caching, a map with a large POI count (e.g.
+	 * many opponent spawn points) re-queries and re-deserializes all of
+	 * them on every single move/attack/auto-battle tick, even though only
+	 * loot/transition types are ever re-read after map entry.
+	 */
+	private function _loadPois( mapId ) {
+		if ( _poiCache.keyExists( arguments.mapId ) ) {
+			return _poiCache[ arguments.mapId ];
+		}
+		var rows = queryExecute(
+			"SELECT x, y, poi_type, payload FROM adventure_map_pois WHERE map_id = :mapId",
+			{ "mapId": arguments.mapId },
+			{ datasource: "gameserver" }
+		);
+		var pois = [];
+		for ( var i = 1; i <= rows.recordCount; i++ ) {
+			arrayAppend( pois, {
+				"x": rows.x[ i ],
+				"y": rows.y[ i ],
+				"type": rows.poi_type[ i ],
+				"payload": len( rows.payload[ i ] ) ? JSONDeserialize( rows.payload[ i ] ) : {}
+			} );
+		}
+		_poiCache[ arguments.mapId ] = pois;
+		return pois;
+	}
+
+	/**
+	 * Same idea as getModuleMap(), but decodes only the chunks overlapping
+	 * a square viewport centered on (centerX, centerY) — for maps too
+	 * large to decode and hold in full (outdoor maps spanning hundreds of
+	 * tiles per side). The returned tiles/decorations are viewport-local
+	 * (1-based), with originX/originY giving the map-space coordinate of
+	 * tiles[1][1], so callers can translate between the two coordinate
+	 * spaces.
+	 *
+	 * @moduleSlug Adventure module slug.
+	 * @mapSlug Map slug within that module.
+	 * @centerX Map-space x coordinate the viewport is centered on.
+	 * @centerY Map-space y coordinate the viewport is centered on.
+	 * @radius Tiles visible in each direction from the center.
+	 */
+	function getModuleMapViewport( moduleSlug, mapSlug, centerX, centerY, radius ) {
+		var mapRow = _getMapRow( arguments.moduleSlug, arguments.mapSlug );
+		var legend = JSONDeserialize( mapRow.tile_legend[ 1 ] );
+		var width = mapRow.width[ 1 ];
+		var height = mapRow.height[ 1 ];
+		var chunkSize = mapRow.chunk_size[ 1 ];
+
+		var minX = max( 1, arguments.centerX - arguments.radius );
+		var minY = max( 1, arguments.centerY - arguments.radius );
+		var maxX = min( width, arguments.centerX + arguments.radius );
+		var maxY = min( height, arguments.centerY + arguments.radius );
+		var minChunkX = int( ( minX - 1 ) / chunkSize );
+		var maxChunkX = int( ( maxX - 1 ) / chunkSize );
+		var minChunkY = int( ( minY - 1 ) / chunkSize );
+		var maxChunkY = int( ( maxY - 1 ) / chunkSize );
+
+		var chunkRows = queryExecute(
+			"SELECT chunk_x, chunk_y, row_data FROM adventure_map_chunks
+			 WHERE map_id = :mapId
+			   AND chunk_x BETWEEN :minChunkX AND :maxChunkX
+			   AND chunk_y BETWEEN :minChunkY AND :maxChunkY",
+			{
+				"mapId": mapRow.id[ 1 ],
+				"minChunkX": minChunkX, "maxChunkX": maxChunkX,
+				"minChunkY": minChunkY, "maxChunkY": maxChunkY
+			},
+			{ datasource: "gameserver" }
+		);
+
+		// Decode each fetched chunk once, then read tiles out of these
+		// chunk-local buffers by (chunkX, chunkY) — never materializing a
+		// full-map-sized grid.
+		var decodedChunks = {};
+		for ( var i = 1; i <= chunkRows.recordCount; i++ ) {
+			var key = "#chunkRows.chunk_x[ i ]#,#chunkRows.chunk_y[ i ]#";
+			decodedChunks[ key ] = { "chunkX": chunkRows.chunk_x[ i ], "chunkY": chunkRows.chunk_y[ i ], "decoded": _decodeChunk( chunkRows.row_data[ i ], legend ) };
+		}
+
+		var viewTiles = [];
+		var viewDecorations = [];
+		for ( var y = minY; y <= maxY; y++ ) {
+			var tileRow = [];
+			var decorationRow = [];
+			for ( var x = minX; x <= maxX; x++ ) {
+				var chunkX = int( ( x - 1 ) / chunkSize );
+				var chunkY = int( ( y - 1 ) / chunkSize );
+				var key = "#chunkX#,#chunkY#";
+				var localX = ( x - 1 ) % chunkSize + 1;
+				var localY = ( y - 1 ) % chunkSize + 1;
+				if ( decodedChunks.keyExists( key ) ) {
+					arrayAppend( tileRow, decodedChunks[ key ].decoded.tiles[ localY ][ localX ] );
+					arrayAppend( decorationRow, decodedChunks[ key ].decoded.decorations[ localY ][ localX ] );
+				} else {
+					arrayAppend( tileRow, "floor" );
+					arrayAppend( decorationRow, "" );
+				}
+			}
+			arrayAppend( viewTiles, tileRow );
+			arrayAppend( viewDecorations, decorationRow );
+		}
+
+		return {
+			"originX": minX,
+			"originY": minY,
+			"width": maxX - minX + 1,
+			"height": maxY - minY + 1,
+			"tiles": viewTiles,
+			"decorations": viewDecorations
+		};
+	}
+
+	/**
+	 * Looks up a single adventure map row by module/map slug. Column
+	 * values come back as arrays (queryExecute's column-major struct
+	 * shape), so callers index [1] for the single row.
+	 */
+	private function _getMapRow( moduleSlug, mapSlug ) {
+		var rows = queryExecute(
+			"SELECT m.id, m.width, m.height, m.chunk_size, m.tile_legend,
+			        m.player_spawn_x, m.player_spawn_y, m.opponent_spawn_x, m.opponent_spawn_y
+			 FROM adventure_maps m
+			 INNER JOIN adventure_modules am ON am.id = m.module_id
+			 WHERE am.slug = :moduleSlug AND m.slug = :mapSlug",
+			{ "moduleSlug": arguments.moduleSlug, "mapSlug": arguments.mapSlug },
+			{ datasource: "gameserver" }
+		);
+		if ( rows.recordCount == 0 ) {
+			throw( type = "MapNotFound", message = "No map '#arguments.mapSlug#' in module '#arguments.moduleSlug#'." );
+		}
+		return rows;
+	}
+
+	/**
+	 * Decodes one chunk's row_data (LF-separated RLE rows) into
+	 * {tiles, decorations} arrays sized to that chunk alone.
+	 */
+	private function _decodeChunk( rowData, legend ) {
+		var lines = listToArray( arguments.rowData, char( 10 ) );
+		var tiles = [];
+		var decorations = [];
+		for ( var line in lines ) {
+			var expanded = _decodeRLE( line );
+			var tileRow = [];
+			var decorationRow = [];
+			for ( var x = 1; x <= len( expanded ); x++ ) {
+				var symbol = mid( expanded, x, 1 );
+				var meaning = arguments.legend.keyExists( symbol ) ? arguments.legend[ symbol ] : { "tile": "floor", "decoration": "" };
+				arrayAppend( tileRow, meaning.tile );
+				arrayAppend( decorationRow, meaning.decoration );
+			}
+			arrayAppend( tiles, tileRow );
+			arrayAppend( decorations, decorationRow );
+		}
+		return { "tiles": tiles, "decorations": decorations };
+	}
+
+	/**
+	 * Copies a decoded chunk's tiles/decorations into a full-map-sized
+	 * grid at its chunk offset (chunkX/chunkY are 0-based chunk indices).
+	 */
+	private function _blitChunk( tiles, decorations, decoded, chunkX, chunkY, chunkSize ) {
+		var offsetY = arguments.chunkY * arguments.chunkSize;
+		var offsetX = arguments.chunkX * arguments.chunkSize;
+		for ( var y = 1; y <= arrayLen( decoded.tiles ); y++ ) {
+			for ( var x = 1; x <= arrayLen( decoded.tiles[ y ] ); x++ ) {
+				arguments.tiles[ offsetY + y ][ offsetX + x ] = decoded.tiles[ y ][ x ];
+				arguments.decorations[ offsetY + y ][ offsetX + x ] = decoded.decorations[ y ][ x ];
+			}
+		}
+	}
+
+	/**
+	 * Builds a width x height grid of empty strings as a blitting target.
+	 */
+	private function _emptyGrid( width, height ) {
+		var grid = [];
+		for ( var y = 1; y <= arguments.height; y++ ) {
+			var row = [];
+			for ( var x = 1; x <= arguments.width; x++ ) {
+				arrayAppend( row, "" );
+			}
+			arrayAppend( grid, row );
+		}
+		return grid;
+	}
+
+	/**
+	 * Expands a "count:symbol,count:symbol,..." RLE-encoded row back into
+	 * its literal character string.
+	 */
+	private function _decodeRLE( rle ) {
+		var out = "";
+		var tokens = listToArray( arguments.rle, "," );
+		for ( var token in tokens ) {
+			var runLength = val( listFirst( token, ":" ) );
+			var symbol = listLast( token, ":" );
+			out &= repeatString( symbol, runLength );
+		}
+		return out;
+	}
+
+	/**
+	 * Compresses a literal row string into "count:symbol" RLE tokens —
+	 * the inverse of _decodeRLE(), used by import tooling when authoring
+	 * adventure module content, not at request time.
+	 */
+	private function _encodeRLE( rowText ) {
+		var tokens = [];
+		var rowLength = len( arguments.rowText );
+		var i = 1;
+		while ( i <= rowLength ) {
+			var symbol = mid( arguments.rowText, i, 1 );
+			var runLength = 1;
+			while ( i + runLength <= rowLength && mid( arguments.rowText, i + runLength, 1 ) == symbol ) {
+				runLength++;
+			}
+			arrayAppend( tokens, "#runLength#:#symbol#" );
+			i += runLength;
+		}
+		return arrayToList( tokens, "," );
+	}
+
+	/**
+	 * Level definitions, as ASCII rows + spawn points. Kept as a function
+	 * (not a class-body constant) purely so the large ASCII literals don't
+	 * clutter the top of the file.
+	 */
+	private function _levels() {
+		return {
+			// A plain 20x20 open room, no walls — the original encounter layout,
+			// kept as the fallback/default level.
+			"openField": {
+				"rows": _repeatRow( ".", 20, 20 ),
+				"playerSpawn": { "x": 10, "y": 10 },
+				"opponentSpawn": { "x": 5, "y": 5 }
+			},
+			// Top and bottom chambers split by a horizontal wall at row 10,
+			// connected only by a 2-tile gap at columns 2-3 (far from either
+			// spawn) — exercises wall-aware pathfinding. A single-column
+			// vertical wall with a same-row gap can't force a real detour: if
+			// nothing else blocks that row, the gap is open along its entire
+			// width, so any path already crossing that row passes through for
+			// free. A full-width horizontal wall with a narrow gap actually
+			// funnels every crossing through one place.
+			"ruinedCrypt": {
+				// Literal "#" must be escaped to "##" in a BoxLang string
+				// literal — an unescaped "#" starts an interpolation
+				// expression, the same rule as bx:output templates, and it
+				// applies here in plain .bx script string literals too.
+				"rows": [
+					"########################################",
+					"##..................##",
+					"##..................##",
+					"##..................##",
+					"##..................##",
+					"##..................##",
+					"##..................##",
+					"##..................##",
+					"##..................##",
+					"##..##################################",
+					"##..................##",
+					"##..................##",
+					"##..................##",
+					"##..................##",
+					"##..................##",
+					"##..................##",
+					"##..................##",
+					"##..................##",
+					"##..................##",
+					"########################################"
+				],
+				// Both spawns sit near the right edge, far from the gap at
+				// columns 2-3 — a straight line between them would hit the
+				// row-10 wall, so reaching the other chamber requires
+				// detouring left to the gap and back, not just luck.
+				"playerSpawn": { "x": 18, "y": 5 },
+				"opponentSpawn": { "x": 18, "y": 15 }
+			},
+			// A proper multi-room dungeon: two small chambers up top (an
+			// Entrance Hall and a side Chamber) joined directly by a corridor
+			// across row 4, each also dropping via its own corridor into one
+			// large Great Hall below — so there are two different routes
+			// between the top rooms (the direct one, or via the Great Hall),
+			// and a two-tile pillar in the Great Hall blocks both movement and
+			// ranged line of sight through its own square.
+			"shatteredHalls": {
+				"rows": [
+					"########################################",
+					"##......##########......####",
+					"##......##########......####",
+					"##.................####",
+					"##......##########......####",
+					"##......##########......####",
+					"##......##########......####",
+					"######.######################.########",
+					"######.######################.########",
+					"######.######################.########",
+					"######.######################.########",
+					"##.................####",
+					"##.................####",
+					"##.................####",
+					"##........##........####",
+					"##........##........####",
+					"##.................####",
+					"##.................####",
+					"########################################",
+					"########################################"
+				],
+				// Entrance Hall (top-left) to the Great Hall's far corridor
+				// mouth (top-right, beyond the pillar) — neither the direct
+				// top corridor nor the Great Hall route is a straight line, so
+				// both wall-avoiding movement and pillar line-of-sight blocking
+				// come into play.
+				"playerSpawn": { "x": 4, "y": 4 },
+				"opponentSpawn": { "x": 16, "y": 15 }
+			},
+			// A large, six-room dungeon (40x30): three small upper chambers
+			// (Entrance Hall, Armory, Library) joined by a corridor along row
+			// 5, each with its own corridor dropping into one big Great Hall
+			// spanning the middle, which in turn drops via two more corridors
+			// into a Treasure Vault and a Throne Room at the bottom. Three
+			// pillars spaced across the Great Hall block both movement and
+			// ranged line of sight through their own squares. Doors mark every
+			// room-to-room threshold, torches flank the upper rooms' entrances,
+			// spikes flavor the floor near the pillars, and a chest sits in
+			// the Treasure Vault.
+			"grandDungeon": {
+				"rows": [
+					"################################################################################",
+					"##........##########........############..........####",
+					"##........##########........############..........####",
+					"##........##########........############..........####",
+					"##^......^..D..^......^..D...^........^####",
+					"##........##########........############..........####",
+					"##........##########........############..........####",
+					"##........##########........############..........####",
+					"########.########################.############################.##############",
+					"########.########################.############################.##############",
+					"########.########################.############################.##############",
+					"########.########################.############################.##############",
+					"##.....................................####",
+					"##.....................................####",
+					"##.....................................####",
+					"##..........Ox......O......xO..........####",
+					"##.....................................####",
+					"##.....................................####",
+					"##.....................................####",
+					"##.....................................####",
+					"##############.##############################################.################",
+					"##############D##############################################D################",
+					"##############.##############################################.################",
+					"######.........##############################..........######",
+					"######.........##############################..........######",
+					"######....c....##############################..........######",
+					"######.........##############################..........######",
+					"######.........##############################..........######",
+					"################################################################################",
+					"################################################################################"
+				],
+				// Entrance Hall (top-left) to the Throne Room (bottom-right) —
+				// the far opposite corners of the dungeon, forcing a long route
+				// down through the Great Hall and its pillars.
+				"playerSpawn": { "x": 5, "y": 5 },
+				"opponentSpawn": { "x": 32, "y": 26 }
+			}
+		};
+	}
+
+	/**
+	 * Builds a walls-free rectangular room's ASCII rows (all floor).
+	 */
+	private function _repeatRow( tileChar, width, height ) {
+		var row = "";
+		for ( var i = 1; i <= arguments.width; i++ ) {
+			row &= arguments.tileChar;
+		}
+		var rows = [];
+		for ( var i = 1; i <= arguments.height; i++ ) {
+			arrayAppend( rows, row );
+		}
+		return rows;
+	}
+
+	/**
+	 * Parses ASCII rows (see the class doc-comment's legend) into the
+	 * {width, height, tiles, decorations, playerSpawn, opponentSpawn} struct
+	 * the rest of the app uses. Every row must be the same length; that
+	 * length is the level's width.
+	 */
+	private function _parseAsciiLevel( rows, playerSpawn, opponentSpawn ) {
+		var height = arguments.rows.len();
+		var width = len( arguments.rows[ 1 ] );
+		var tiles = [];
+		var decorations = [];
+		for ( var y = 1; y <= height; y++ ) {
+			var rowText = arguments.rows[ y ];
+			if ( len( rowText ) != width ) {
+				throw( type = "InvalidLevel", message = "Row #y# has length #len( rowText )#, expected #width# (every row must match the first row's length)." );
+			}
+			var tileRow = [];
+			var decorationRow = [];
+			for ( var x = 1; x <= width; x++ ) {
+				var symbol = mid( rowText, x, 1 );
+				var meaning = TILE_LEGEND.keyExists( symbol ) ? TILE_LEGEND[ symbol ] : TILE_LEGEND[ "." ];
+				arrayAppend( tileRow, meaning.tile );
+				arrayAppend( decorationRow, meaning.decoration );
+			}
+			arrayAppend( tiles, tileRow );
+			arrayAppend( decorations, decorationRow );
+		}
+		return {
+			"width": width,
+			"height": height,
+			"tiles": tiles,
+			"decorations": decorations,
+			"tileClasses": _buildTileClassGrid( tiles, decorations, width, height ),
+			"playerSpawn": { "x": arguments.playerSpawn.x, "y": arguments.playerSpawn.y },
+			"opponentSpawn": { "x": arguments.opponentSpawn.x, "y": arguments.opponentSpawn.y },
+			// Hand-authored ASCII levels have no map-to-map transitions —
+			// kept as an empty array (not simply absent) so every grid,
+			// hardcoded or database-backed, has the same shape and
+			// default.bx's _checkMapTransition() never has to check whether
+			// the key exists.
+			"pois": []
+		};
+	}
+
+}

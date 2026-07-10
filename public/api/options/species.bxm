@@ -1,0 +1,24 @@
+<bx:header name="Content-Type" value="application/json">
+<bx:script>
+
+	characterService = new models.CharacterService();
+	baseOptions = characterService.listSpeciesOptions();
+	result = [];
+
+	for ( opt in baseOptions ) {
+		entry = {
+			"name"          : opt.name,
+			"subraces"      : opt.subraces,
+			"detail"        : characterService.resolveSpecies( opt.name ),
+			"subraceDetails": {}
+		};
+
+		for ( subrace in opt.subraces ) {
+			entry.subraceDetails[ subrace ] = characterService.resolveSpecies( subrace );
+		}
+
+		result.append( entry );
+	}
+
+	writeOutput( jsonSerialize( result ) );
+</bx:script>

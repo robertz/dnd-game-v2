@@ -1,0 +1,94 @@
+{
+	"classGenerationDirectory": "${boxlang-home}/classes",
+	"debugMode": "${BOXLANG_DEBUG:false}",
+	"clearClassFilesOnStartup": true,
+	"classResolverCache": true,
+	"trustedCache": false,
+	"whitespaceCompressionEnabled": true,
+	"useHighPrecisionMath": true,
+	"mappings": {
+		"/models": "${user-dir}/models",
+		"/modules": "${user-dir}/modules",
+		"/public": "${user-dir}/public"
+	},
+	"modulesDirectory": [
+		"${user-dir}/modules",
+		"${boxlang-home}/modules"
+	],
+	"logging": {
+		"logsDirectory": "${user-dir}/runtime/logs",
+		"maxLogDays": 90,
+		"maxFileSize": "100MB",
+		"totalCapSize": "5GB",
+		"rootLevel": "WARN",
+		"defaultEncoder": "text",
+		"statusPrinterOnLoad": false,
+		"loggers": {
+			"runtime": { "level": "INFO", "appender": "file", "additive": false },
+			"async":   { "level": "INFO", "appender": "file", "additive": false },
+			"cache":   { "level": "WARN", "appender": "file", "additive": false }
+		}
+	},
+	"experimental": {
+		"compiler": "asm"
+	},
+	"executors": {
+		"io-tasks": {
+			"type": "virtual",
+			"description": "Unlimited IO bound tasks using Java Virtual Threads"
+		},
+		"cpu-tasks": {
+			"type": "scheduled",
+			"threads": 20,
+			"description": "CPU bound tasks"
+		}
+	},
+	"defaultDatasource": "gameserver",
+	"datasources": {
+		"gameserver": {
+			"connectionLimit": "100",
+			"connectionTimeout": "1",
+			"custom": "useUnicode=true&characterEncoding=UTF8&serverTimezone=UTC&useLegacyDatetimeCode=true&autoReconnect=true&useSSL=false&allowPublicKeyRetrieval=true",
+			"database": "${env.DB_DATABASE:gameserver}",
+			"dbdriver": "${env.DB_DRIVER:MySQL}",
+			"dsn": "jdbc:mysql://{host}:{port}/{database}",
+			"host": "${env.DB_HOST:127.0.0.1}",
+			"password": "",
+			"port": "${env.DB_PORT:3306}",
+			"username": "${env.DB_USER:root}"
+		}
+	},
+	"defaultRemoteMethodReturnFormat": "json",
+	"caches": {
+		"default": {
+			"provider": "BoxCacheProvider",
+			"properties": {
+				"evictCount": 1,
+				"evictionPolicy": "LRU",
+				"freeMemoryPercentageThreshold": 0,
+				"maxObjects": 1000,
+				"defaultLastAccessTimeout": 1800,
+				"defaultTimeout": 3600,
+				"objectStore": "ConcurrentStore",
+				"reapFrequency": 120,
+				"resetTimeoutOnAccess": false,
+				"useLastAccessTimeouts": true
+			}
+		},
+		"bxSessions": {
+			"provider": "BoxCacheProvider",
+			"properties": {
+				"evictCount": 1,
+				"evictionPolicy": "LRU",
+				"maxObjects": 100000,
+				"defaultTimeout": 3600,
+				"objectStore": "ConcurrentStore",
+				"freeMemoryPercentageThreshold": 0,
+				"reapFrequency": 120,
+				"resetTimeoutOnAccess": true,
+				"useLastAccessTimeouts": false
+			}
+		}
+	},
+	"modules": {}
+}

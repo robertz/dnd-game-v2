@@ -1,0 +1,11 @@
+<bx:header name="Content-Type" value="application/json">
+<bx:script>
+
+	combatService = new models.CombatService();
+	className = url.className ?: "";
+
+	writeOutput( jsonSerialize( {
+		"cantrips": combatService.listCastableSpells( className, 0 ),
+		"spells"  : combatService.listCastableSpells( className, 1 )
+	} ) );
+</bx:script>

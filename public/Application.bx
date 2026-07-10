@@ -1,0 +1,6 @@
+class {
+	this.name              = "dnd-game-v2";
+	this.sessionManagement = true;
+	this.sessionTimeout    = createTimespan( 0, 4, 0, 0 );
+	this.datasource        = "gameserver";
+}

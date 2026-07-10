@@ -1,0 +1,159 @@
+<bx:header name="Content-Type" value="application/json">
+<bx:script>
+
+	body = jsonDeserialize( getHttpRequestData().content );
+	charId = body.charId;
+
+	combatService = new models.CombatService();
+	characterService = new models.CharacterService();
+	mapService = new models.MapService();
+
+	player = combatService.loadCharacter( charId );
+	items = characterService.getItemInventory( charId );
+
+	if ( player.hitPoints <= 0 ) {
+		combatService.longRest( player, true );
+	}
+
+	moduleSlug = body.moduleSlug ?: "";
+	mapSlug = body.mapSlug    ?: "";
+	if ( len( moduleSlug ) && !len( mapSlug ) ) {
+		mapSlug = mapService.getEntryMapSlug( moduleSlug );
+	}
+	map = len( moduleSlug )
+		? mapService.getModuleMap( moduleSlug, mapSlug )
+		: mapService.getLevel( "grandDungeon" );
+
+	player.position = { "x": map.playerSpawn.x, "y": map.playerSpawn.y };
+
+	// Build opponent roster from spawn POIs if present, otherwise fall back to random.
+	spawnPois = map.pois.filter( function( p ) { return p.type == "spawn"; } );
+
+	if ( spawnPois.len() == 0 ) {
+		opponents = combatService.randomMonstersForLevel( player.level, randRange( 2, 3 ) );
+		takenPositions = [ player.position ];
+		positions = combatService.randomOpenTilesNear( map, map.opponentSpawn, 5, opponents.len(), takenPositions );
+		for ( i = 1; i <= opponents.len(); i++ ) {
+			opponents[ i ].position = ( i <= positions.len() ) ? positions[ i ] : { "x": map.opponentSpawn.x, "y": map.opponentSpawn.y };
+			opponents[ i ].mobIndex = i;
+			opponents[ i ].visible  = false;
+		}
+	} else {
+		opponents      = [];
+		takenPositions = [ player.position ];
+
+		for ( spawnPoi in spawnPois ) {
+			payload = spawnPoi.payload;
+			spawnCount = ( payload.countMode == "random" )
+				? randRange( payload.countMin, payload.countMax )
+				: payload.count;
+
+			if ( spawnCount < 1 ) {
+				continue;
+			}
+
+			if ( payload.monsterMode == "specific" && len( payload.monsterName ?: "" ) ) {
+				template = combatService.monsterByName( payload.monsterName );
+				mobs = [];
+				for ( j = 1; j <= spawnCount; j++ ) {
+					mobs.append( duplicate( template ) );
+				}
+			} else {
+				mobs = combatService.randomMonstersForLevel( player.level, spawnCount );
+			}
+
+			positions = combatService.randomOpenTilesNear( map, { "x": spawnPoi.x, "y": spawnPoi.y }, 5, mobs.len(), takenPositions );
+			for ( k = 1; k <= mobs.len(); k++ ) {
+				mobs[ k ].position = ( k <= positions.len() ) ? positions[ k ] : { "x": spawnPoi.x, "y": spawnPoi.y };
+				mobs[ k ].visible  = false;
+				takenPositions.append( mobs[ k ].position );
+				opponents.append( mobs[ k ] );
+			}
+		}
+
+		if ( opponents.len() == 0 ) {
+			opponents = combatService.randomMonstersForLevel( player.level, 1 );
+			opponents[ 1 ].position = { "x": spawnPois[ 1 ].x, "y": spawnPois[ 1 ].y };
+			opponents[ 1 ].visible  = false;
+		}
+
+		for ( i = 1; i <= opponents.len(); i++ ) {
+			opponents[ i ].mobIndex = i;
+		}
+	}
+
+	// Set initial visibility via line-of-sight so mobs in range appear in the sidebar immediately.
+	anyVisible = false;
+	for ( opp in opponents ) {
+		opp.visible = combatService.hasLineOfSight( map, opp.position, player.position );
+		if ( opp.visible ) { anyVisible = true; }
+	}
+
+	state = {
+		"player"                : player,
+		"opponents"             : opponents,
+		"opponent"              : opponents[ 1 ],
+		"map"                   : map,
+		"moduleSlug"            : moduleSlug,
+		"mapSlug"               : mapSlug,
+		"gridPois"              : map.pois,
+		"items"                 : items,
+		"currentTurn"           : "player",
+		"round"                 : 1,
+		"movementRemaining"     : int( player.speed / 5 ),
+		"actionUsed"            : false,
+		"bonusActionUsed"       : false,
+		"attacksUsedThisTurn"   : 0,
+		"roundHadAction"        : false,
+		"staleAutoRounds"       : 0,
+		"gameOver"              : false,
+		"outcome"               : "",
+		"log"                   : [ "You enter the dungeon. Move toward the enemies to begin combat." ],
+		"initiativeRolled"      : false,
+		"selectedOpponentIndex" : 1,
+		"autoBattling"          : false,
+		"stateSaved"            : false,
+		"restDiceCount"         : 1,
+		"asiMode"               : "single",
+		"asiAbility1"           : "str",
+		"asiAbility2"           : "dex",
+		"asiSelectedFeat"       : "",
+		"asiSelectedSkills"     : []
+	};
+	if ( anyVisible ) {
+		player.inCombat          = true;
+		state.initiativeRolled   = true;
+		combatService.rollForInitiative( state );
+	} else {
+		player.inCombat = false;
+	}
+
+	if ( !structKeyExists( application, "encounters" ) ) {
+		application.encounters = {};
+	}
+	application.encounters[ charId ] = state;
+
+	writeOutput( jsonSerialize( {
+		"player"                : state.player,
+		"opponents"             : combatService.opponentsForClient( state ),
+		"mapWidth"              : map.width,
+		"mapHeight"             : map.height,
+		"mapTiles"              : map.tiles,
+		"mapDecorations"        : map.decorations,
+		"mapPois"               : map.pois,
+		"currentTurn"           : state.currentTurn,
+		"round"                 : state.round,
+		"movementRemaining"     : state.movementRemaining,
+		"actionUsed"            : state.actionUsed,
+		"bonusActionUsed"       : state.bonusActionUsed,
+		"attacksUsedThisTurn"   : state.attacksUsedThisTurn,
+		"gameOver"              : state.gameOver,
+		"outcome"               : state.outcome,
+		"log"                   : state.log,
+		"initiativeRolled"      : state.initiativeRolled,
+		"selectedOpponentIndex" : state.selectedOpponentIndex,
+		"items"                 : state.items,
+		"autoBattling"          : state.autoBattling,
+		"gridPois"              : state.gridPois
+	} ) );
+</bx:script>

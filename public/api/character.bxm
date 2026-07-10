@@ -1,0 +1,12 @@
+<bx:header name="Content-Type" value="application/json">
+<bx:script>
+
+	characterService = new models.CharacterService();
+
+	if ( cgi.request_method == "PUT" ) {
+		body = jsonDeserialize( getHttpRequestData().content );
+		writeOutput( jsonSerialize( characterService.saveCharacter( body ) ) );
+	} else {
+		writeOutput( jsonSerialize( characterService.loadCharacter( url.id ) ) );
+	}
+</bx:script>
