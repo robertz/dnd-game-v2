@@ -224,7 +224,15 @@ const App = {
 	template: `
 		<header class="site-header">
 			<h1 class="fantasy-heading site-title">The Adventure Begins</h1>
-			<nav class="site-nav">
+			<button
+				type="button"
+				class="nav-toggle"
+				:class="{ 'nav-toggle-open': mobileNavOpen }"
+				:aria-expanded="mobileNavOpen"
+				aria-label="Toggle navigation"
+				@click="mobileNavOpen = !mobileNavOpen"
+			><span></span><span></span><span></span></button>
+			<nav class="site-nav" :class="{ 'site-nav-open': mobileNavOpen }">
 				<router-link to="/"              :class="{ 'site-nav-active': route.path === '/' }">Character Select</router-link>
 				<router-link to="/character/new" :class="{ 'site-nav-active': route.path === '/character/new' }">Create Character</router-link>
 				<template v-if="hasCharacter">
@@ -253,6 +261,11 @@ const App = {
 		const route        = VueRouter.useRoute();
 		const router       = VueRouter.useRouter();
 		const hasCharacter = Vue.computed( () => !!localStorage.getItem( "charId" ) );
+		const mobileNavOpen = ref( false );
+
+		// Collapse the mobile menu on every navigation instead of requiring
+		// a close handler on each individual link/router-link.
+		Vue.watch( () => route.path, () => { mobileNavOpen.value = false; } );
 
 		onMounted( async () => {
 			const result = await api( "/api/auth.bxm" );
@@ -265,7 +278,7 @@ const App = {
 			router.push( "/login" );
 		}
 
-		return { route, hasCharacter, currentUser, logout };
+		return { route, hasCharacter, currentUser, mobileNavOpen, logout };
 	}
 };
 
