@@ -231,9 +231,9 @@ const App = {
 					<router-link to="/character/sheet" :class="{ 'site-nav-active': route.path === '/character/sheet' }">Character Sheet</router-link>
 					<router-link to="/adventure"       :class="{ 'site-nav-active': route.path === '/adventure' }">Adventure</router-link>
 				</template>
-				<router-link to="/map-editor" :class="{ 'site-nav-active': route.path === '/map-editor' }">Map Editor</router-link>
+				<router-link to="/map-editor" class="site-nav-desktop-only" :class="{ 'site-nav-active': route.path === '/map-editor' }">Map Editor</router-link>
 				<template v-if="currentUser">
-					<span class="stat-subtitle">{{ currentUser.username }}</span>
+					<span class="site-nav-avatar" :title="currentUser.username">{{ currentUser.username.charAt(0).toUpperCase() }}</span>
 					<a href="#" @click.prevent="logout">Log Out</a>
 				</template>
 				<router-link v-else to="/login" :class="{ 'site-nav-active': route.path === '/login' }">Sign In</router-link>

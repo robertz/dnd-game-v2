@@ -4,4 +4,16 @@ class {
 	this.sessionTimeout    = createTimespan( 0, 4, 0, 0 );
 	this.datasource        = "gameserver";
 	this.sessioncookie     = { "httponly": true, "samesite": "Lax" };
+
+	/**
+	 * A cache-busting token for static assets (index.bxm appends it as
+	 * ?v=... on every <script>/<link> tag) — fixed for the life of the
+	 * server process, so browsers still cache assets between requests but
+	 * a restart (i.e. every deploy) forces every client to fetch fresh
+	 * copies instead of serving stale JS/CSS from disk cache.
+	 */
+	function onApplicationStart() {
+		application.assetVersion = dateTimeFormat( now(), "yyyyMMddHHmmss" );
+		return true;
+	}
 }

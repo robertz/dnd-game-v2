@@ -10,18 +10,20 @@
 	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 	<link href="https://fonts.googleapis.com/css2?family=Cinzel+Decorative:wght@700;900&family=IM+Fell+English:ital@0;1&display=swap" rel="stylesheet">
 
-	<link rel="stylesheet" href="/assets/game.css">
+	<bx:output><link rel="stylesheet" href="/assets/game.css?v=#application.assetVersion#"></bx:output>
 	<script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
 	<script src="https://unpkg.com/vue-router@4/dist/vue-router.global.prod.js"></script>
 </head>
 <body>
 	<div id="app"></div>
-	<script src="/assets/components/Auth.js"></script>
-	<script src="/assets/components/CharacterCreation.js"></script>
-	<script src="/assets/components/CharacterSheet.js"></script>
-	<script src="/assets/components/ModuleSelect.js"></script>
-	<script src="/assets/components/CombatEncounter.js"></script>
-	<script src="/assets/components/MapEditor.js"></script>
-	<script src="/assets/app.js"></script>
+	<bx:output>
+	<script src="/assets/components/Auth.js?v=#application.assetVersion#"></script>
+	<script src="/assets/components/CharacterCreation.js?v=#application.assetVersion#"></script>
+	<script src="/assets/components/CharacterSheet.js?v=#application.assetVersion#"></script>
+	<script src="/assets/components/ModuleSelect.js?v=#application.assetVersion#"></script>
+	<script src="/assets/components/CombatEncounter.js?v=#application.assetVersion#"></script>
+	<script src="/assets/components/MapEditor.js?v=#application.assetVersion#"></script>
+	<script src="/assets/app.js?v=#application.assetVersion#"></script>
+	</bx:output>
 </body>
 </html>

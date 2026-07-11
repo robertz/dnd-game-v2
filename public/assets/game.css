@@ -166,6 +166,27 @@ main.scroll {
 	box-shadow: 0 0 10px 1px rgba(185, 146, 47, 0.4);
 }
 
+/* The signed-in user reads as a round avatar badge (first initial) among
+   the .site-nav pill links — same dark-fill/gold-border treatment as the
+   nav buttons so it belongs in that row, but circular and non-interactive
+   so it doesn't look like just another link. Full username is a title
+   tooltip. */
+.site-nav-avatar {
+	width: 34px;
+	height: 34px;
+	flex: none;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	border-radius: 50%;
+	font-family: "Cinzel Decorative", serif;
+	font-size: 0.9rem;
+	color: var(--gold);
+	background: var(--night);
+	border: 1px solid var(--gold);
+	cursor: default;
+}
+
 .parchment-panel {
 	background:
 		radial-gradient( ellipse at top left, rgba(255,255,255,0.15), transparent 60% ),
@@ -237,6 +258,12 @@ main.scroll {
 	display: flex;
 	justify-content: center;
 	margin: 1.5rem 0;
+	/* Tiles have a 16px floor (see .tile's clamp()); at up to 25 visible
+	   columns that's 400px+ minimum width, wider than a phone viewport.
+	   Scroll horizontally instead of breaking out of the page layout —
+	   same fix .editor-grid-wrap already uses for the same problem. */
+	overflow-x: auto;
+	max-width: 100%;
 }
 
 .editor-panel {
@@ -290,6 +317,23 @@ main.scroll {
 	display: flex;
 	flex-direction: column;
 	gap: 0.75rem;
+}
+
+/* Below the same 900px breakpoint everything else in the app drops to a
+   single column at, swap the whole editor for a "come back on a bigger
+   screen" notice — a drag/paint grid tool has no good small-screen form,
+   unlike the rest of the site which just reflows. */
+.mapeditor-mobile-notice {
+	display: none;
+}
+
+@media (max-width: 900px) {
+	.mapeditor > *:not(.mapeditor-mobile-notice) {
+		display: none;
+	}
+	.mapeditor-mobile-notice {
+		display: block;
+	}
 }
 
 .mapeditor-topbar {
@@ -967,6 +1011,11 @@ main.scroll {
 
 .rest-bar .stat-subtitle {
 	margin: 0;
+	/* .rest-bar is a dark card, unlike most .stat-subtitle usage's usual
+	   light parchment backdrop — light text keeps it legible instead of
+	   dark-on-dark (same distinction noted on .inventory-name above). */
+	color: var(--parchment);
+	opacity: 0.9;
 }
 
 .btn {
@@ -1124,6 +1173,14 @@ main.scroll {
 	grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
 	gap: 0.75rem;
 	margin: 1rem 0;
+}
+
+/* For grids of short, fixed-width content (the ability-score value picker's
+   two-digit numbers) — the default 160px minmax floor is sized for card
+   titles like "Dragonborn" and wastes most of a phone's width on a single
+   number per row. 70px fits 4-5 per row even at 375px. */
+.creation-grid-sm {
+	grid-template-columns: repeat(auto-fill, minmax(70px, 1fr));
 }
 
 .creation-card {
@@ -1650,6 +1707,14 @@ main.scroll {
 
 	.ability-grid {
 		grid-template-columns: repeat(3, 1fr);
+	}
+
+	/* Map Editor isn't usable on a small screen (see .mapeditor-mobile-notice) —
+	   don't offer the nav link into it at all below that width. Needs to
+	   out-specificity ".site-nav a" (a class+type selector), so this can't
+	   be the single class selector alone. */
+	.site-nav a.site-nav-desktop-only {
+		display: none;
 	}
 }
 

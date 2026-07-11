@@ -2,6 +2,16 @@ const MapEditor = {
 	template: `
 		<div class="mapeditor">
 
+			<!-- Small screens can't usefully host a drag/paint grid editor —
+			     point them back rather than hand them a broken tool. -->
+			<div class="mapeditor-mobile-notice">
+				<h1 class="fantasy-heading">Map Editor</h1>
+				<p class="encounter-intro">The map editor needs a larger screen — grid painting isn't practical on a phone. Please switch to a tablet or desktop to build or edit maps.</p>
+				<div class="turn-actions">
+					<router-link class="btn" to="/">Back to Character Select</router-link>
+				</div>
+			</div>
+
 			<!-- Top toolbar: title, load, settings toggle, save -->
 			<div class="mapeditor-topbar">
 				<h1 class="fantasy-heading">Map Editor</h1>

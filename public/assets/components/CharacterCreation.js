@@ -219,7 +219,7 @@ const CharacterCreation = {
 					<h2 class="fantasy-heading">Ability Scores</h2>
 					<p class="stat-subtitle">Click a value to assign it to the next ability (STR, DEX, CON, INT, WIS, CHA in order).</p>
 
-					<div class="creation-grid">
+					<div class="creation-grid creation-grid-sm">
 						<div
 							v-for="value in standardArray"
 							:key="value"
