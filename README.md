@@ -51,7 +51,7 @@ public/
     components/*.js          Vue components (one per screen)
     game.css                 All styling
 
-db/                       SQL migrations + seed data (see db/README.md)
+db/                       Schema + reference-data dump (see db/README.md)
 runtime/boxlang.json      BoxLang engine config (datasource, caches, logging)
 server.json               CommandBox server config (webroot, WebSocket wiring)
 ```
@@ -64,13 +64,13 @@ server.json               CommandBox server config (webroot, WebSocket wiring)
 
 ## Setup
 
-1. **Database** — run the migrations and seeds under [`db/`](db) against a
-   fresh `gameserver` database, **in the order documented in
-   [`db/README.md`](db/README.md)** (schema and data are split across
-   separate files that depend on each other). Read that file's warning
-   about `USE gameserver` in some of these scripts before running anything —
-   they silently target the `gameserver` database regardless of what your
-   client session was otherwise connected to.
+1. **Database** — load the schema and reference data into a fresh
+   `gameserver` database:
+   ```sh
+   mysql -u root gameserver < db/schema.sql
+   mysql -u root gameserver < db/seed.sql
+   ```
+   See [`db/README.md`](db/README.md) for what each file contains.
 2. **Configure the datasource** (optional) — defaults assume MySQL on
    `127.0.0.1:3306` with user `root` and no password, database `gameserver`.
    Override via environment variables before starting the server:
@@ -89,12 +89,14 @@ server.json               CommandBox server config (webroot, WebSocket wiring)
    served at the URL CommandBox prints (defaults to a random free port —
    pin one with `box server start port=8080` if you want it fixed).
 4. **Create an account** — visit the app and register; there's no seeded
-   admin user. Existing/legacy character or map rows with no owner won't be
-   visible to anyone until claimed:
+   admin user. The seeded modules (The Arena, Starter Dungeon) have no
+   owner, so they're playable immediately but not editable via the map
+   editor until claimed:
    ```sql
-   UPDATE characters SET owner_user_id = <your-user-id> WHERE owner_user_id IS NULL;
    UPDATE adventure_modules SET owner_user_id = <your-user-id> WHERE owner_user_id IS NULL;
    ```
+   (If you're restoring an existing populated database rather than a fresh
+   seed, the same applies to any `characters` rows with no owner.)
 
 ## Development notes
 

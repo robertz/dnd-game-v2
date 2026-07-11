@@ -1,80 +1,70 @@
-# Database migrations &amp; seeds
+# Database
 
-## ⚠️ Before running anything here
+Two files, generated from the live `gameserver` database rather than
+hand-maintained as incremental migrations:
 
-Several of these files — `001_srd_schema.sql`, `017_beginner_dungeon.sql`, and
-most of `seeds/` — contain their own `USE gameserver;` (or
-`CREATE DATABASE IF NOT EXISTS gameserver`) statement. That statement
-silently switches whatever session runs the file onto the `gameserver`
-database, **regardless of which database your client connection was already
-pointed at**. Piping one of these files into a session/tool that you intended
-to scope to a different (e.g. scratch/test) database will instead run
-against your real `gameserver` database.
+- **`schema.sql`** — structure only (all 26 tables, indexes, foreign keys).
+- **`seed.sql`** — reference/content data only: classes, subclasses, class
+  features, feats, magic items, monsters, spells, weapons, armors, items,
+  species, species traits, backgrounds, conditions, and the built-in
+  adventure modules/maps. Deliberately excludes user/runtime tables
+  (`users`, `characters`, `character_inventory`, `character_features`,
+  `character_feats`, `character_armor`, `character_items`,
+  `character_multiclass_levels`) — those start empty; accounts and
+  characters are created through the app itself.
 
-Always run these with a plain, no-target-database connection, exactly as
-shown below (`mysql -u root <file`, not `mysql -u root some_other_db <file`),
-and never against a connection you're already using for something else.
-
-## Run order
-
-The migrations (`migrations/001`–`017`) are copied verbatim from the
-earlier ColdBox-based version of this project
-([`dnd-game`](../../dnd-game)), which tracked schema changes as it was
-built. `018` and `019` are v2-specific and not present in that history.
-Seeds are separate files correlated to a migration by the tables they
-populate — v1 didn't script an end-to-end bootstrap, so this order is
-reconstructed from those dependencies (schema before its data, base seed
-before its follow-up `_update` patch):
+## Setup
 
 ```sh
-mysql -u root                          < migrations/001_srd_schema.sql
-mysql -u root gameserver               < seeds/srd_seed.sql
-mysql -u root gameserver               < seeds/cantrips_seed.sql
-mysql -u root gameserver               < migrations/002_spell_mechanics.sql
-mysql -u root gameserver               < seeds/spell_mechanics_update.sql
-mysql -u root gameserver               < migrations/003_character_spell_choices.sql
-mysql -u root gameserver               < migrations/004_rest_tracking.sql
-mysql -u root gameserver               < migrations/005_adventure_modules.sql
-mysql -u root gameserver               < seeds/adventure_seed.sql
-mysql -u root gameserver               < migrations/006_map_entry_point.sql
-mysql -u root gameserver               < migrations/007_armor_and_items.sql
-mysql -u root gameserver               < seeds/armor_and_items_seed.sql
-mysql -u root gameserver               < migrations/008_structured_monster_data.sql
-mysql -u root gameserver               < seeds/monsters_legacy_structured_update.sql
-mysql -u root gameserver               < seeds/monsters_5e_srd_missing_seed.sql
-mysql -u root gameserver               < seeds/monsters_5e_srd_missing_schema_update.sql
-mysql -u root gameserver               < migrations/009_species_and_conditions.sql
-mysql -u root gameserver               < migrations/010_backgrounds.sql
-mysql -u root gameserver               < seeds/legacy_srd_seed.sql
-mysql -u root gameserver               < migrations/011_character_class_skills.sql
-mysql -u root gameserver               < migrations/012_multi_spell_known.sql
-mysql -u root gameserver               < migrations/013_expertise_and_rage.sql
-mysql -u root gameserver               < migrations/014_rest_and_game_clock.sql
-mysql -u root gameserver               < migrations/015_multiclassing.sql
-mysql -u root gameserver               < migrations/016_magic_initiate_picks.sql
-mysql -u root gameserver               < migrations/017_beginner_dungeon.sql   # data, despite living in migrations/
-mysql -u root gameserver               < seeds/dungeon_of_doom_seed.sql
-mysql -u root gameserver               < migrations/018_battle_record.sql
-mysql -u root gameserver               < migrations/019_add_auth.sql
+mysql -u root gameserver < db/schema.sql
+mysql -u root gameserver < db/seed.sql
 ```
 
-`018_battle_record.sql` and `019_add_auth.sql` are the two v2-specific
-migrations — the former recreates three per-character battle-record columns
-(`monsters_fought`, `monsters_killed`, `deaths`) that exist in the current
-schema but were never captured as a tracked migration in the v1 project;
-the latter adds the `users` table and per-owner scoping (see the main
-[README](../README.md)).
+Always specify the target database explicitly on the command line as shown
+(`mysql -u root gameserver < file`), not via a `USE` statement inside the
+file or an already-connected session pointed elsewhere — neither file
+contains its own `USE`/`CREATE DATABASE` statement, specifically so running
+it can't silently land on the wrong database.
 
-## Verifying against a live database
+The built-in modules seed with `owner_user_id = NULL` (no user exists yet
+on a fresh install). They're playable immediately, but not editable via the
+map editor until claimed:
 
-If you already have a populated `gameserver` and just want to confirm these
-files still match its schema, compare against a real dump rather than
-re-running anything destructive:
+```sql
+UPDATE adventure_modules SET owner_user_id = <your-user-id> WHERE owner_user_id IS NULL;
+```
+
+## Regenerating these files
+
+If the live schema or reference content changes, regenerate both from the
+current database rather than hand-editing:
 
 ```sh
-mysqldump -u root --no-data --skip-comments --compact gameserver > /tmp/live_schema.sql
+mysqldump -u root --no-data --set-gtid-purged=OFF --skip-comments gameserver \
+  > db/schema.sql
+
+mysqldump -u root --no-create-info --complete-insert --set-gtid-purged=OFF --skip-comments \
+  gameserver classes subclasses class_features feats magic_items monsters spells weapons \
+  armors items species species_traits backgrounds conditions \
+  adventure_modules adventure_maps adventure_map_chunks adventure_map_pois \
+  > db/seed.sql
 ```
 
-then diff table-by-table. `001_srd_schema.sql` unconditionally drops and
-recreates its tables — never run it against a database with data you want
-to keep.
+Then re-add the header comments (see the top of each file) and, in
+`seed.sql`, null out `adventure_modules.owner_user_id` again before
+committing — otherwise a fresh install's seed data would reference a
+specific user id that doesn't exist yet.
+
+## History
+
+Earlier versions of this file documented a 17-file migration history plus
+10 separate seed files, copied from this project's previous ColdBox-based
+incarnation ([`dnd-game`](../../dnd-game)). That history is why the schema
+looks the way it does, but keeping it in this repo as executable SQL turned
+out to be actively dangerous: one of those files (`001_srd_schema.sql`)
+carried a hardcoded `USE gameserver;` that, when run against a session
+intended for a different (scratch/test) database, silently dropped and
+recreated tables in the real database instead — which is exactly what
+happened once. The two files here are a straight dump of the schema that
+history produced, with no destructive statements and no possibility of
+targeting the wrong database.
