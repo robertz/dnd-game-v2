@@ -1,11 +1,21 @@
 <bx:header name="Content-Type" value="application/json">
 <bx:script>
 
+	auth = new models.AuthService();
+	userId = auth.currentUserId();
+</bx:script>
+<bx:if !userId>
+	<bx:header statuscode="401" statustext="Unauthorized">
+	<bx:script>writeOutput( jsonSerialize( { "error": "Unauthorized" } ) ); return;</bx:script>
+</bx:if>
+<bx:script>
+
 	characterService = new models.CharacterService();
 
 	if ( cgi.request_method == "POST" ) {
 		body = jsonDeserialize( getHttpRequestData().content );
 		charId = characterService.createCharacter(
+			ownerUserId     = userId,
 			name            = body.name,
 			classId         = body.classId,
 			str             = body.str,
@@ -26,7 +36,7 @@
 		writeOutput( jsonSerialize( { "id": charId } ) );
 	} else {
 		combatService = new models.CombatService();
-		rows = characterService.listSavedCharacters();
+		rows = characterService.listSavedCharacters( userId );
 		result = [];
 		for ( row in rows ) {
 			result.append( {
@@ -50,7 +60,10 @@
 				},
 				"currentLevelXp"  : combatService.xpForLevel( row.level ),
 				"nextLevelXp"     : row.level < 20 ? combatService.xpForLevel( row.level + 1 ) : 0,
-				"lastPlayed"      : dateTimeFormat( row.updated_at, "yyyy-MM-dd HH:mm" )
+				"lastPlayed"      : dateTimeFormat( row.updated_at, "yyyy-MM-dd HH:mm" ),
+				"monstersFought"  : row.monsters_fought,
+				"monstersKilled"  : row.monsters_killed,
+				"deaths"          : row.deaths
 			} );
 		}
 		writeOutput( jsonSerialize( result ) );

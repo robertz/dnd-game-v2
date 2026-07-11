@@ -1,6 +1,14 @@
 <bx:header name="Content-Type" value="application/json">
 <bx:script>
 
+	auth = new models.AuthService();
+</bx:script>
+<bx:if !auth.currentUserId()>
+	<bx:header statuscode="401" statustext="Unauthorized">
+	<bx:script>writeOutput( jsonSerialize( { "error": "Unauthorized" } ) ); return;</bx:script>
+</bx:if>
+<bx:script>
+
 	characterService = new models.CharacterService();
 	names = characterService.listBackgroundOptions();
 	result = [];

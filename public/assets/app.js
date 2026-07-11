@@ -8,6 +8,10 @@ async function api( path, options = {} ) {
 		headers: { "Content-Type": "application/json" },
 		...options
 	} );
+	if ( res.status === 401 && path !== "/api/auth.bxm" ) {
+		window.location.href = "/login";
+		throw new Error( `API error 401 on ${ path }` );
+	}
 	if ( !res.ok ) throw new Error( `API error ${ res.status } on ${ path }` );
 	return res.json();
 }
@@ -79,6 +83,12 @@ const CharacterSelect = {
 									<span class="ability-chip-label">{{ ab.toUpperCase() }}</span>
 									{{ character.abilities[ab] }} ({{ abilityMod( character.abilities[ab] ) }})
 								</span>
+							</div>
+
+							<div class="char-card-stats char-battle-record">
+								<span><strong>Fought</strong> {{ character.monstersFought }}</span>
+								<span><strong>Kills</strong> {{ character.monstersKilled }}</span>
+								<span v-if="character.deaths > 0"><strong>Deaths</strong> {{ character.deaths }}</span>
 							</div>
 
 							<div class="xp-row" v-if="character.nextLevelXp > 0">
@@ -163,6 +173,7 @@ const router = createRouter( {
 	history: createWebHistory(),
 	routes: [
 		{ path: "/",                component: CharacterSelect },
+		{ path: "/login",           component: Auth },
 		{ path: "/character/new",   component: CharacterCreation },
 		{ path: "/character/sheet", component: CharacterSheet },
 		{ path: "/adventure",       component: ModuleSelect },
@@ -205,6 +216,8 @@ const gameState = reactive( {
 	asiSelectedSkills:     []
 } );
 
+const currentUser = ref( null );
+
 // ── Root layout ───────────────────────────────────────────────────────────────
 
 const App = {
@@ -219,6 +232,11 @@ const App = {
 					<router-link to="/adventure"       :class="{ 'site-nav-active': route.path === '/adventure' }">Adventure</router-link>
 				</template>
 				<router-link to="/map-editor" :class="{ 'site-nav-active': route.path === '/map-editor' }">Map Editor</router-link>
+				<template v-if="currentUser">
+					<span class="stat-subtitle">{{ currentUser.username }}</span>
+					<a href="#" @click.prevent="logout">Log Out</a>
+				</template>
+				<router-link v-else to="/login" :class="{ 'site-nav-active': route.path === '/login' }">Sign In</router-link>
 			</nav>
 		</header>
 		<main class="scroll">
@@ -233,8 +251,21 @@ const App = {
 	`,
 	setup() {
 		const route        = VueRouter.useRoute();
+		const router       = VueRouter.useRouter();
 		const hasCharacter = Vue.computed( () => !!localStorage.getItem( "charId" ) );
-		return { route, hasCharacter };
+
+		onMounted( async () => {
+			const result = await api( "/api/auth.bxm" );
+			currentUser.value = result.userId ? result : null;
+		} );
+
+		async function logout() {
+			await api( "/api/auth.bxm", { method: "POST", body: JSON.stringify( { action: "logout" } ) } );
+			currentUser.value = null;
+			router.push( "/login" );
+		}
+
+		return { route, hasCharacter, currentUser, logout };
 	}
 };
 
@@ -246,4 +277,5 @@ createApp( App )
 	.provide( "socket", socket )
 	.provide( "gameState", gameState )
 	.provide( "api", api )
+	.provide( "setCurrentUser", ( u ) => { currentUser.value = u; } )
 	.mount( "#app" );

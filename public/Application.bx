@@ -3,4 +3,5 @@ class {
 	this.sessionManagement = true;
 	this.sessionTimeout    = createTimespan( 0, 4, 0, 0 );
 	this.datasource        = "gameserver";
+	this.sessioncookie     = { "httponly": true, "samesite": "Lax" };
 }

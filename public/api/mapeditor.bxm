@@ -1,6 +1,15 @@
 <bx:header name="Content-Type" value="application/json">
 <bx:script>
 
+	auth = new models.AuthService();
+	userId = auth.currentUserId();
+</bx:script>
+<bx:if !userId>
+	<bx:header statuscode="401" statustext="Unauthorized">
+	<bx:script>writeOutput( jsonSerialize( { "error": "Unauthorized" } ) ); return;</bx:script>
+</bx:if>
+<bx:script>
+
 	mapService = new models.MapService();
 	combatService = new models.CombatService();
 
@@ -34,8 +43,18 @@
 
 	if ( cgi.request_method == "POST" ) {
 		body = jsonDeserialize( getHttpRequestData().content );
+		moduleIsForbidden = mapService.moduleExists( body.moduleSlug ) && !auth.ownsModule( userId, body.moduleSlug );
+	}
+</bx:script>
+<bx:if cgi.request_method == "POST" && moduleIsForbidden>
+	<bx:header statuscode="403" statustext="Forbidden">
+	<bx:script>writeOutput( jsonSerialize( { "error": "Forbidden" } ) ); return;</bx:script>
+</bx:if>
+<bx:script>
 
+	if ( cgi.request_method == "POST" ) {
 		mapService.saveEditorMap(
+			ownerUserId       = userId,
 			moduleSlug        = body.moduleSlug,
 			moduleName        = body.moduleName,
 			moduleDescription = body.moduleDescription ?: "",

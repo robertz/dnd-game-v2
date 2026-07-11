@@ -1,12 +1,22 @@
 <bx:header name="Content-Type" value="application/json">
 <bx:script>
 
-	characterService = new models.CharacterService();
+	auth = new models.AuthService();
+	userId = auth.currentUserId();
+</bx:script>
+<bx:if !userId>
+	<bx:header statuscode="401" statustext="Unauthorized">
+	<bx:script>writeOutput( jsonSerialize( { "error": "Unauthorized" } ) ); return;</bx:script>
+</bx:if>
+<bx:script>
 
-	if ( cgi.request_method == "PUT" ) {
-		body = jsonDeserialize( getHttpRequestData().content );
-		writeOutput( jsonSerialize( characterService.saveCharacter( body ) ) );
-	} else {
-		writeOutput( jsonSerialize( characterService.loadCharacter( url.id ) ) );
-	}
+	characterService = new models.CharacterService();
+	charId = url.id;
+</bx:script>
+<bx:if !auth.ownsCharacter( userId, charId )>
+	<bx:header statuscode="403" statustext="Forbidden">
+	<bx:script>writeOutput( jsonSerialize( { "error": "Forbidden" } ) ); return;</bx:script>
+</bx:if>
+<bx:script>
+	writeOutput( jsonSerialize( characterService.getCharacterSheet( charId ) ) );
 </bx:script>

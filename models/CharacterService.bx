@@ -187,15 +187,17 @@ class singleton {
 	 * screen to list — identity plus the sheet-level stats the select card
 	 * displays (HP, AC, abilities, XP, gold, background/alignment).
 	 */
-	function listSavedCharacters() {
+	function listSavedCharacters( ownerUserId ) {
 		return queryExecute(
 			"SELECT c.id, c.name, cl.name AS className, c.species, c.level,
 			        c.background, c.alignment, c.hit_points, c.max_hit_points,
 			        c.armor_class, c.speed, c.proficiency_bonus, c.experience_points,
-			        c.gold, c.str, c.dex, c.con, c.int_score, c.wis, c.cha, c.updated_at
+			        c.gold, c.str, c.dex, c.con, c.int_score, c.wis, c.cha, c.updated_at,
+			        c.monsters_fought, c.monsters_killed, c.deaths
 			 FROM characters c JOIN classes cl ON cl.id = c.class_id
+			 WHERE c.owner_user_id = :ownerUserId
 			 ORDER BY c.name",
-			{}, { datasource: "gameserver" }
+			{ "ownerUserId": arguments.ownerUserId }, { datasource: "gameserver" }
 		);
 	}
 
@@ -236,7 +238,7 @@ class singleton {
 	 *  whenever the character is loaded. Empty for a non-caster class.
 	 */
 	function createCharacter(
-		name, classId, str, dex, con, intScore, wis, cha,
+		ownerUserId, name, classId, str, dex, con, intScore, wis, cha,
 		species = "", background = "", alignment = "", level = 1,
 		knownCantrip = "", knownSpell = "", choiceAbilities = [], classSkills = [], fightingStyle = ""
 	) {
@@ -272,9 +274,10 @@ class singleton {
 
 		queryExecute(
 			"INSERT INTO characters
-			 (name, class_id, species, background, alignment, level, str, dex, con, int_score, wis, cha, proficiency_bonus, armor_class, hit_points, max_hit_points, speed, known_cantrips, known_spells, chosen_skill_proficiencies)
-			 VALUES (:name, :classId, :species, :background, :alignment, :level, :str, :dex, :con, :intScore, :wis, :cha, :proficiencyBonus, :armorClass, :hitPoints, :maxHitPoints, :speed, :knownCantrip, :knownSpell, :chosenSkillProficiencies)",
+			 (owner_user_id, name, class_id, species, background, alignment, level, str, dex, con, int_score, wis, cha, proficiency_bonus, armor_class, hit_points, max_hit_points, speed, known_cantrips, known_spells, chosen_skill_proficiencies)
+			 VALUES (:ownerUserId, :name, :classId, :species, :background, :alignment, :level, :str, :dex, :con, :intScore, :wis, :cha, :proficiencyBonus, :armorClass, :hitPoints, :maxHitPoints, :speed, :knownCantrip, :knownSpell, :chosenSkillProficiencies)",
 			{
+				"ownerUserId": arguments.ownerUserId,
 				"name": arguments.name,
 				"classId": arguments.classId,
 				"species": len( arguments.species ) ? arguments.species : javaCast( "null", 0 ),
@@ -498,7 +501,7 @@ class singleton {
 			        c.str, c.dex, c.con, c.int_score, c.wis, c.cha,
 			        c.proficiency_bonus, c.armor_class, c.max_hit_points, c.speed, c.gold,
 			        c.experience_points, c.known_cantrips, c.known_spells, c.chosen_skill_proficiencies,
-			        c.expertise_skills,
+			        c.expertise_skills, c.monsters_fought, c.monsters_killed, c.deaths,
 			        cl.name AS className, cl.hit_die, cl.saving_throw_proficiencies, sc.name AS subclassName
 			 FROM characters c JOIN classes cl ON cl.id = c.class_id
 			 LEFT JOIN subclasses sc ON sc.id = c.subclass_id
@@ -593,6 +596,9 @@ class singleton {
 			"speed": row.speed[ 1 ],
 			"gold": row.gold[ 1 ],
 			"experiencePoints": row.experience_points[ 1 ],
+			"monstersFought": row.monsters_fought[ 1 ],
+			"monstersKilled": row.monsters_killed[ 1 ],
+			"deaths": row.deaths[ 1 ],
 			"savingThrowProficiencies": listToArray( row.saving_throw_proficiencies[ 1 ], " and ", false, true ),
 			// Background + species traits (see CombatService.resolveSkillProficiencies())
 			// plus the class skills the player picked at creation (chosen_skill_proficiencies).

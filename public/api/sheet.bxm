@@ -1,11 +1,33 @@
 <bx:header name="Content-Type" value="application/json">
 <bx:script>
 
+	auth = new models.AuthService();
+	userId = auth.currentUserId();
+</bx:script>
+<bx:if !userId>
+	<bx:header statuscode="401" statustext="Unauthorized">
+	<bx:script>writeOutput( jsonSerialize( { "error": "Unauthorized" } ) ); return;</bx:script>
+</bx:if>
+<bx:script>
+
 	characterService = new models.CharacterService();
 	combatService = new models.CombatService();
 
 	if ( cgi.request_method == "GET" ) {
 		charId = url.id;
+	} else {
+		body = jsonDeserialize( getHttpRequestData().content );
+		charId = body.charId;
+		action = body.action;
+	}
+</bx:script>
+<bx:if !auth.ownsCharacter( userId, charId )>
+	<bx:header statuscode="403" statustext="Forbidden">
+	<bx:script>writeOutput( jsonSerialize( { "error": "Forbidden" } ) ); return;</bx:script>
+</bx:if>
+<bx:script>
+
+	if ( cgi.request_method == "GET" ) {
 		character = characterService.getCharacterSheet( charId );
 		className = character.className;
 		isFullCaster = combatService.isFullCasterClass( className );
@@ -27,10 +49,6 @@
 		} ) );
 		return;
 	}
-
-	body = jsonDeserialize( getHttpRequestData().content );
-	charId = body.charId;
-	action = body.action;
 
 	switch ( action ) {
 		case "equipWeapon":

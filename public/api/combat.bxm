@@ -1,8 +1,23 @@
 <bx:header name="Content-Type" value="application/json">
 <bx:script>
 
+	auth = new models.AuthService();
+	userId = auth.currentUserId();
+</bx:script>
+<bx:if !userId>
+	<bx:header statuscode="401" statustext="Unauthorized">
+	<bx:script>writeOutput( jsonSerialize( { "error": "Unauthorized" } ) ); return;</bx:script>
+</bx:if>
+<bx:script>
+
 	body = jsonDeserialize( getHttpRequestData().content );
 	charId = body.charId;
+</bx:script>
+<bx:if !auth.ownsCharacter( userId, charId )>
+	<bx:header statuscode="403" statustext="Forbidden">
+	<bx:script>writeOutput( jsonSerialize( { "error": "Forbidden" } ) ); return;</bx:script>
+</bx:if>
+<bx:script>
 
 	combatService = new models.CombatService();
 	characterService = new models.CharacterService();
@@ -90,6 +105,7 @@
 	}
 
 	state = {
+		"ownerUserId"           : userId,
 		"player"                : player,
 		"opponents"             : opponents,
 		"opponent"              : opponents[ 1 ],

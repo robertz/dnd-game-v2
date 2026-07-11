@@ -16,6 +16,7 @@
 </head>
 <body>
 	<div id="app"></div>
+	<script src="/assets/components/Auth.js"></script>
 	<script src="/assets/components/CharacterCreation.js"></script>
 	<script src="/assets/components/CharacterSheet.js"></script>
 	<script src="/assets/components/ModuleSelect.js"></script>

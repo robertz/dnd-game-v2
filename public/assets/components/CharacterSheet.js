@@ -145,6 +145,13 @@ const CharacterSheet = {
 						<div class="core-stat-box"><span class="core-stat-label">Gold</span><span class="core-stat-value">{{ character.gold }}</span></div>
 					</div>
 
+					<!-- Battle record -->
+					<div class="core-stats-row">
+						<div class="core-stat-box"><span class="core-stat-label">Monsters Fought</span><span class="core-stat-value">{{ character.monstersFought ?? 0 }}</span></div>
+						<div class="core-stat-box"><span class="core-stat-label">Monsters Slain</span><span class="core-stat-value">{{ character.monstersKilled ?? 0 }}</span></div>
+						<div class="core-stat-box"><span class="core-stat-label">Deaths</span><span class="core-stat-value">{{ character.deaths ?? 0 }}</span></div>
+					</div>
+
 					<!-- Traits/features -->
 					<div class="parchment-panel" style="margin-bottom:1rem;">
 						<p class="stat-subtitle" style="margin:0 0 0.5rem;"><strong>Saving Throws:</strong> {{ (character.savingThrowProficiencies||[]).join(', ') }}</p>

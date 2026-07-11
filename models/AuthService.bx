@@ -1,0 +1,125 @@
+/**
+ * Registration/login/session + ownership checks. BoxLang has no native
+ * bcrypt, so passwords are hashed with PBKDF2WithHmacSHA256 via direct Java
+ * interop (JDK-only, no extra dependency).
+ */
+class singleton {
+
+	PBKDF2_ITERATIONS = 100000;
+	PBKDF2_KEY_LENGTH = 256;
+
+	function register( username, password ) {
+		var cleanUsername = trim( arguments.username );
+		if ( !len( cleanUsername ) || len( cleanUsername ) > 50 ) {
+			throw( type = "InvalidUsername", message = "Username must be 1-50 characters." );
+		}
+		if ( len( arguments.password ) < 8 ) {
+			throw( type = "InvalidPassword", message = "Password must be at least 8 characters." );
+		}
+
+		var existing = queryExecute(
+			"SELECT id FROM users WHERE username = :username",
+			{ "username": cleanUsername }, { datasource: "gameserver" }
+		);
+		if ( existing.recordCount > 0 ) {
+			throw( type = "UsernameTaken", message = "That username is already taken." );
+		}
+
+		queryExecute(
+			"INSERT INTO users (username, password_hash) VALUES (:username, :passwordHash)",
+			{ "username": cleanUsername, "passwordHash": _hashPassword( arguments.password ) },
+			{ datasource: "gameserver", result: "insertResult" }
+		);
+
+		var userId = insertResult.generatedKey;
+		_startSession( userId, cleanUsername );
+		return userId;
+	}
+
+	function login( username, password ) {
+		var cleanUsername = trim( arguments.username );
+		var rows = queryExecute(
+			"SELECT id, username, password_hash FROM users WHERE username = :username",
+			{ "username": cleanUsername }, { datasource: "gameserver" }
+		);
+		if ( rows.recordCount == 0 || !_verifyPassword( arguments.password, rows.password_hash[ 1 ] ) ) {
+			throw( type = "InvalidCredentials", message = "Invalid username or password." );
+		}
+
+		_startSession( rows.id[ 1 ], rows.username[ 1 ] );
+		return rows.id[ 1 ];
+	}
+
+	function logout() {
+		structDelete( session, "userId" );
+		structDelete( session, "username" );
+	}
+
+	function currentUserId() {
+		return structKeyExists( session, "userId" ) ? session.userId : 0;
+	}
+
+	function currentUsername() {
+		return structKeyExists( session, "username" ) ? session.username : "";
+	}
+
+	function ownsCharacter( userId, characterId ) {
+		if ( !arguments.userId ) {
+			return false;
+		}
+		var rows = queryExecute(
+			"SELECT id FROM characters WHERE id = :characterId AND owner_user_id = :userId",
+			{ "characterId": arguments.characterId, "userId": arguments.userId },
+			{ datasource: "gameserver" }
+		);
+		return rows.recordCount > 0;
+	}
+
+	function ownsModule( userId, moduleSlug ) {
+		if ( !arguments.userId ) {
+			return false;
+		}
+		var rows = queryExecute(
+			"SELECT id FROM adventure_modules WHERE slug = :moduleSlug AND owner_user_id = :userId",
+			{ "moduleSlug": arguments.moduleSlug, "userId": arguments.userId },
+			{ datasource: "gameserver" }
+		);
+		return rows.recordCount > 0;
+	}
+
+	private function _startSession( userId, username ) {
+		session.userId   = arguments.userId;
+		session.username = arguments.username;
+	}
+
+	private function _hashPassword( password ) {
+		var random = createObject( "java", "java.security.SecureRandom" );
+		var salt = createObject( "java", "java.lang.reflect.Array" ).newInstance( createObject( "java", "java.lang.Byte" ).TYPE, 16 );
+		random.nextBytes( salt );
+		var hash = _pbkdf2( arguments.password, salt );
+		return PBKDF2_ITERATIONS & ":" & binaryEncode( salt, "base64" ) & ":" & binaryEncode( hash, "base64" );
+	}
+
+	private function _verifyPassword( password, storedHash ) {
+		var parts = listToArray( arguments.storedHash, ":" );
+		if ( parts.len() != 3 ) {
+			return false;
+		}
+		var salt = binaryDecode( parts[ 2 ], "base64" );
+		var expectedHash = binaryDecode( parts[ 3 ], "base64" );
+		var actualHash = _pbkdf2( arguments.password, salt, val( parts[ 1 ] ) );
+		return _constantTimeEquals( expectedHash, actualHash );
+	}
+
+	private function _pbkdf2( password, salt, iterations = PBKDF2_ITERATIONS ) {
+		var factory = createObject( "java", "javax.crypto.SecretKeyFactory" ).getInstance( "PBKDF2WithHmacSHA256" );
+		var spec = createObject( "java", "javax.crypto.spec.PBEKeySpec" )
+			.init( arguments.password.toCharArray(), arguments.salt, arguments.iterations, PBKDF2_KEY_LENGTH );
+		return factory.generateSecret( spec ).getEncoded();
+	}
+
+	private function _constantTimeEquals( a, b ) {
+		return createObject( "java", "java.security.MessageDigest" ).isEqual( arguments.a, arguments.b );
+	}
+
+}

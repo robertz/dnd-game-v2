@@ -1,146 +1,128 @@
 const MapEditor = {
 	template: `
-		<div class="encounter">
-			<div class="encounter-main">
-				<h1 class="fantasy-heading">Map Editor</h1>
+		<div class="mapeditor">
 
-				<!-- Load existing -->
-				<div class="parchment-panel editor-panel">
-					<h2 class="fantasy-heading">Load Existing Map</h2>
-					<template v-if="existingMaps.length === 0">
-						<p class="encounter-intro">No saved maps yet — build one below and save it.</p>
-					</template>
-					<template v-else>
-						<div class="creation-scores">
-							<label>Map
-								<select v-model="selectedExisting" class="creation-input">
-									<option value="">— choose a map —</option>
-									<option v-for="opt in existingMaps" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+			<!-- Top toolbar: title, load, settings toggle, save -->
+			<div class="mapeditor-topbar">
+				<h1 class="fantasy-heading">Map Editor</h1>
+				<div class="mapeditor-topbar-actions">
+					<select v-model="selectedExisting" class="creation-input mapeditor-load-select">
+						<option value="">Load a map…</option>
+						<option v-for="opt in existingMaps" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+					</select>
+					<button type="button" class="btn btn-sm" :disabled="!selectedExisting" @click="loadExisting()">Load</button>
+					<button type="button" :class="['btn', 'btn-sm', showSettings ? 'btn-auto-battle' : '']" @click="showSettings = !showSettings">⚙ Settings</button>
+					<button type="button" class="btn btn-sm btn-attack" @click="saveMap()">Save Map</button>
+				</div>
+			</div>
+
+			<p v-if="saveError" class="encounter-banner encounter-banner-defeat mapeditor-banner">{{ saveError }}</p>
+			<p v-if="saveMessage" class="encounter-banner encounter-banner-victory mapeditor-banner">{{ saveMessage }}</p>
+
+			<!-- Settings drawer: module/map identity, grid size — set once, then tucked away -->
+			<div v-if="showSettings" class="parchment-panel mapeditor-settings">
+				<div class="mapeditor-settings-grid">
+					<label>Module slug<input v-model="moduleSlug" type="text" class="creation-input" placeholder="e.g. lost-mines"></label>
+					<label>Module name<input v-model="moduleName" type="text" class="creation-input" placeholder="e.g. Lost Mines of the Trade Road"></label>
+					<label>Module description<input v-model="moduleDescription" type="text" class="creation-input"></label>
+					<label>Map slug<input v-model="mapSlug" type="text" class="creation-input" placeholder="e.g. trade-road"></label>
+					<label>Map name<input v-model="mapName" type="text" class="creation-input"></label>
+					<label>Width<input v-model.number="width" type="number" class="creation-input" min="1" max="128"></label>
+					<label>Height<input v-model.number="height" type="number" class="creation-input" min="1" max="128"></label>
+					<label>Chunk size<input v-model.number="chunkSize" type="number" class="creation-input" min="1" max="128"></label>
+				</div>
+				<div class="turn-actions">
+					<button type="button" :class="['btn', 'btn-sm', isEntryMap ? 'btn-auto-battle' : '']" @click="isEntryMap = !isEntryMap">{{ isEntryMap ? '✓ Entry Map for Module' : 'Set as Entry Map' }}</button>
+					<button type="button" class="btn btn-sm" @click="newGrid()">New Grid (clears painting)</button>
+				</div>
+				<p class="stat-subtitle" style="margin:0.4rem 0 0;">The module picker only enters a module's entry map — others are reached via transitions.</p>
+			</div>
+
+			<!-- Sidebar (tools, right next to the canvas) + canvas -->
+			<div class="mapeditor-body">
+				<aside class="mapeditor-sidebar">
+
+					<div class="editor-sidebar-section">
+						<h3 class="editor-sidebar-title">Brush</h3>
+						<div class="palette-grid">
+							<button type="button" v-for="swatch in palette" :key="swatch.symbol"
+								:class="['palette-swatch-btn', placeMode === 'paint' && brush === swatch.symbol ? 'palette-swatch-btn-selected' : '']"
+								:title="swatch.label"
+								@click="selectBrush( swatch.symbol )"
+							>
+								<span :class="['tile', 'palette-swatch-preview', swatch.cssClass]"></span>
+								<span class="palette-swatch-label">{{ swatch.label }}</span>
+							</button>
+						</div>
+					</div>
+
+					<div class="editor-sidebar-section">
+						<h3 class="editor-sidebar-title">Place</h3>
+						<div class="tool-btn-col">
+							<button type="button" :class="['btn', 'btn-sm', 'tool-btn', placeMode === 'player' ? 'btn-auto-battle' : '']" @click="setPlaceMode('player')">⚔ Player Spawn</button>
+							<button type="button" :class="['btn', 'btn-sm', 'tool-btn', placeMode === 'spawn' ? 'btn-auto-battle' : '']" @click="setPlaceMode('spawn')">☠ Opponent Spawn</button>
+							<button type="button" :class="['btn', 'btn-sm', 'tool-btn', placeMode === 'transition' ? 'btn-auto-battle' : '']" @click="setPlaceMode('transition')">🌀 Transition</button>
+						</div>
+						<p class="editor-mode-hint">{{ modeLabel }}</p>
+
+						<!-- Contextual options for the active placement tool -->
+						<div v-if="placeMode === 'spawn'" class="editor-tool-options">
+							<label>Count
+								<select v-model="spawnCountMode" class="creation-input">
+									<option value="fixed">Fixed</option>
+									<option value="random">Random range</option>
 								</select>
 							</label>
-						</div>
-						<div class="turn-actions">
-							<button type="button" class="btn" @click="loadExisting()">Load</button>
-						</div>
-					</template>
-				</div>
-
-				<!-- Module & Map identity -->
-				<div class="parchment-panel editor-panel">
-					<h2 class="fantasy-heading">Module &amp; Map</h2>
-					<div class="creation-scores">
-						<label>Module slug<input v-model="moduleSlug" type="text" class="creation-input" placeholder="e.g. lost-mines"></label>
-						<label>Module name<input v-model="moduleName" type="text" class="creation-input" placeholder="e.g. Lost Mines of the Trade Road"></label>
-						<label>Module description<input v-model="moduleDescription" type="text" class="creation-input"></label>
-					</div>
-					<div class="creation-scores">
-						<label>Map slug<input v-model="mapSlug" type="text" class="creation-input" placeholder="e.g. trade-road"></label>
-						<label>Map name<input v-model="mapName" type="text" class="creation-input"></label>
-					</div>
-					<div class="turn-actions">
-						<button type="button" :class="['btn', isEntryMap ? 'btn-auto-battle' : '']" @click="isEntryMap = !isEntryMap">{{ isEntryMap ? '✓ Entry Map for Module' : 'Set as Entry Map' }}</button>
-					</div>
-					<p class="encounter-intro">The module picker only enters a module's entry map — others are reached via transitions.</p>
-				</div>
-
-				<!-- Grid size -->
-				<div class="parchment-panel editor-panel">
-					<h2 class="fantasy-heading">Grid Size</h2>
-					<div class="creation-scores">
-						<label>Width<input v-model.number="width" type="number" class="creation-input" min="1" max="60"></label>
-						<label>Height<input v-model.number="height" type="number" class="creation-input" min="1" max="60"></label>
-						<label>Chunk size<input v-model.number="chunkSize" type="number" class="creation-input" min="1" max="60"></label>
-					</div>
-					<div class="turn-actions">
-						<button type="button" class="btn" @click="newGrid()">New Grid (clears painting)</button>
-					</div>
-				</div>
-
-				<!-- Brush palette -->
-				<div class="parchment-panel editor-panel">
-					<h2 class="fantasy-heading">Brush</h2>
-					<div class="palette-row">
-						<div v-for="swatch in palette" :key="swatch.symbol"
-							:class="['tile', swatch.cssClass ? swatch.cssClass : '', placeMode === 'paint' && brush === swatch.symbol ? 'palette-swatch-selected' : '', 'palette-swatch']"
-							:title="swatch.label"
-							@click="selectBrush(swatch.symbol)"
-						></div>
-					</div>
-					<div class="turn-actions">
-						<button type="button" :class="['btn', placeMode === 'player' ? 'btn-auto-battle' : '']" @click="setPlaceMode('player')">Place Player Spawn</button>
-					</div>
-					<p class="encounter-intro">
-						Mode: {{ modeLabel }}
-						<template v-if="playerSpawn.x"> · Player spawn: ({{ playerSpawn.x }}, {{ playerSpawn.y }})</template>
-					</p>
-				</div>
-
-				<!-- Spawn points -->
-				<div class="parchment-panel editor-panel">
-					<h2 class="fantasy-heading">Opponent Spawn Points</h2>
-					<div class="creation-scores">
-						<label>Spawn count
-							<select v-model="spawnCountMode" class="creation-input">
-								<option value="fixed">Fixed</option>
-								<option value="random">Random range</option>
-							</select>
-						</label>
-						<template v-if="spawnCountMode === 'fixed'">
-							<label>Count<input v-model.number="spawnCount" type="number" class="creation-input" min="1"></label>
-						</template>
-						<template v-else>
-							<label>Min<input v-model.number="spawnCountMin" type="number" class="creation-input" min="1"></label>
-							<label>Max<input v-model.number="spawnCountMax" type="number" class="creation-input" min="1"></label>
-						</template>
-					</div>
-					<div class="creation-scores">
-						<label>Monster
-							<select v-model="spawnMonsterMode" class="creation-input">
-								<option value="random">Random (level-appropriate)</option>
-								<option value="specific">Specific monster</option>
-							</select>
-						</label>
-						<template v-if="spawnMonsterMode === 'specific'">
-							<label>Which monster
+							<template v-if="spawnCountMode === 'fixed'">
+								<label>Amount<input v-model.number="spawnCount" type="number" class="creation-input" min="1"></label>
+							</template>
+							<template v-else>
+								<div class="editor-tool-options-row">
+									<label>Min<input v-model.number="spawnCountMin" type="number" class="creation-input" min="1"></label>
+									<label>Max<input v-model.number="spawnCountMax" type="number" class="creation-input" min="1"></label>
+								</div>
+							</template>
+							<label>Monster
+								<select v-model="spawnMonsterMode" class="creation-input">
+									<option value="random">Random (level-appropriate)</option>
+									<option value="specific">Specific monster</option>
+								</select>
+							</label>
+							<label v-if="spawnMonsterMode === 'specific'">Which
 								<select v-model="spawnMonsterName" class="creation-input">
-									<option value="">— choose a monster —</option>
+									<option value="">— choose —</option>
 									<option v-for="m in monsterOptions" :key="m.name" :value="m.name">{{ m.name }} (CR {{ m.cr }})</option>
 								</select>
 							</label>
-						</template>
-					</div>
-					<div class="turn-actions">
-						<button type="button" :class="['btn', placeMode === 'spawn' ? 'btn-auto-battle' : '']" @click="setPlaceMode('spawn')">Place Spawn Point</button>
-					</div>
-					<ul v-if="spawnPoints.length" class="attack-list">
-						<li v-for="(sp, i) in spawnPoints" :key="i">
-							({{ sp.x }}, {{ sp.y }}) &mdash; {{ describeSpawn(sp) }}
-							<button type="button" class="btn btn-end-turn" @click="spawnPoints.splice(i,1)">Remove</button>
-						</li>
-					</ul>
-				</div>
+						</div>
 
-				<!-- Transitions -->
-				<div class="parchment-panel editor-panel">
-					<h2 class="fantasy-heading">Map Transitions</h2>
-					<div class="creation-scores">
-						<label>Target module slug<input v-model="transitionTargetModule" type="text" class="creation-input" placeholder="e.g. lost-mines"></label>
-						<label>Target map slug<input v-model="transitionTargetMap" type="text" class="creation-input" placeholder="e.g. trade-road"></label>
+						<div v-if="placeMode === 'transition'" class="editor-tool-options">
+							<label>Target module<input v-model="transitionTargetModule" type="text" class="creation-input" placeholder="e.g. lost-mines"></label>
+							<label>Target map<input v-model="transitionTargetMap" type="text" class="creation-input" placeholder="e.g. trade-road"></label>
+						</div>
 					</div>
-					<div class="turn-actions">
-						<button type="button" :class="['btn', placeMode === 'transition' ? 'btn-auto-battle' : '']" @click="setPlaceMode('transition')">Place Transition</button>
-					</div>
-					<ul v-if="transitions.length" class="attack-list">
-						<li v-for="(tr, i) in transitions" :key="i">
-							({{ tr.x }}, {{ tr.y }}) &rarr; {{ tr.targetModule }} / {{ tr.targetMap }}
-							<button type="button" class="btn btn-end-turn" @click="transitions.splice(i,1)">Remove</button>
-						</li>
-					</ul>
-				</div>
 
-				<!-- Grid canvas -->
-				<div v-if="grid.length" class="editor-grid-wrap">
-					<div class="battle-grid" :style="{ gridTemplateColumns: 'repeat(' + width + ', 1fr)' }">
+					<div v-if="playerSpawn.x || spawnPoints.length || transitions.length" class="editor-sidebar-section">
+						<h3 class="editor-sidebar-title">Placed Markers</h3>
+						<ul class="editor-marker-list">
+							<li v-if="playerSpawn.x" class="editor-marker-row">
+								<span>⚔ Player spawn — ({{ playerSpawn.x }}, {{ playerSpawn.y }})</span>
+							</li>
+							<li v-for="(sp, i) in spawnPoints" :key="'sp'+i" class="editor-marker-row">
+								<span>☠ ({{ sp.x }}, {{ sp.y }}) — {{ describeSpawn(sp) }}</span>
+								<button type="button" class="btn btn-sm btn-end-turn" @click="spawnPoints.splice(i,1)">✕</button>
+							</li>
+							<li v-for="(tr, i) in transitions" :key="'tr'+i" class="editor-marker-row">
+								<span>🌀 ({{ tr.x }}, {{ tr.y }}) → {{ tr.targetModule }}/{{ tr.targetMap }}</span>
+								<button type="button" class="btn btn-sm btn-end-turn" @click="transitions.splice(i,1)">✕</button>
+							</li>
+						</ul>
+					</div>
+
+				</aside>
+
+				<div class="editor-grid-wrap mapeditor-canvas">
+					<div v-if="grid.length" class="battle-grid" :style="{ gridTemplateColumns: 'repeat(' + width + ', 1fr)' }">
 						<template v-for="(rowArr, rIdx) in grid" :key="rIdx">
 							<div v-for="(sym, cIdx) in rowArr" :key="cIdx"
 								:class="cellClass(cIdx + 1, rIdx + 1, sym)"
@@ -148,15 +130,6 @@ const MapEditor = {
 								@click="paintTile(cIdx + 1, rIdx + 1)"
 							>{{ cellEmoji(cIdx + 1, rIdx + 1) }}</div>
 						</template>
-					</div>
-				</div>
-
-				<!-- Save -->
-				<div class="parchment-panel editor-panel">
-					<p v-if="saveError" class="encounter-banner encounter-banner-defeat">{{ saveError }}</p>
-					<p v-if="saveMessage" class="encounter-banner encounter-banner-victory">{{ saveMessage }}</p>
-					<div class="turn-actions">
-						<button type="button" class="btn btn-attack" @click="saveMap()">Save Map</button>
 					</div>
 				</div>
 			</div>
@@ -194,6 +167,7 @@ const MapEditor = {
 		const monsterOptions = ref( [] );
 		const saveMessage = ref( "" );
 		const saveError   = ref( "" );
+		const showSettings = ref( true );
 
 		const TILE_CLASSES = {
 			".": "", "#": "tile-wall", "^": "tile-torch", "O": "tile-pillar", "D": "tile-door",
@@ -225,7 +199,7 @@ const MapEditor = {
 			if ( placeMode.value === "player" )     return "Click a tile to set the player spawn";
 			if ( placeMode.value === "spawn" )      return "Click a tile to place an opponent spawn point";
 			if ( placeMode.value === "transition" ) return "Click a tile to place a transition";
-			return "Painting terrain";
+			return "Painting terrain — pick a tile above";
 		} );
 
 		onMounted( async () => {
@@ -240,8 +214,8 @@ const MapEditor = {
 		}
 
 		function newGrid() {
-			const w = Math.max( 1, Math.min( 60, width.value ) );
-			const h = Math.max( 1, Math.min( 60, height.value ) );
+			const w = Math.max( 1, Math.min( 128, width.value ) );
+			const h = Math.max( 1, Math.min( 128, height.value ) );
 			width.value  = w;
 			height.value = h;
 			grid.value   = buildEmptyGrid( w, h );
@@ -259,7 +233,10 @@ const MapEditor = {
 		}
 
 		function setPlaceMode( mode ) {
-			placeMode.value = mode;
+			// Clicking the already-active tool switches back to painting,
+			// so there's always a one-click way out of a placement mode
+			// without having to reach for a brush swatch.
+			placeMode.value = ( placeMode.value === mode ) ? "paint" : mode;
 		}
 
 		function spawnPointAt( x, y ) {
@@ -367,6 +344,7 @@ const MapEditor = {
 				transitions.value       = data.transitions ?? [];
 				isEntryMap.value        = data.isEntry ?? false;
 				placeMode.value         = "paint";
+				showSettings.value      = false;
 				saveMessage.value       = `Loaded '${ data.mapName }' — edit and Save Map to update it.`;
 			} catch ( e ) {
 				saveError.value = "Failed to load map.";
@@ -377,8 +355,8 @@ const MapEditor = {
 			saveError.value   = "";
 			saveMessage.value = "";
 
-			if ( !moduleSlug.value || !moduleName.value ) { saveError.value = "Module slug and name are required."; return; }
-			if ( !mapSlug.value    || !mapName.value    ) { saveError.value = "Map slug and name are required."; return; }
+			if ( !moduleSlug.value || !moduleName.value ) { saveError.value = "Module slug and name are required."; showSettings.value = true; return; }
+			if ( !mapSlug.value    || !mapName.value    ) { saveError.value = "Map slug and name are required."; showSettings.value = true; return; }
 			if ( !playerSpawn.value.x || spawnPoints.value.length === 0 ) {
 				saveError.value = "Place a player spawn and at least one opponent spawn point before saving.";
 				return;
@@ -429,7 +407,7 @@ const MapEditor = {
 			mapSlug, mapName, isEntryMap, grid, playerSpawn, spawnPoints, transitions,
 			brush, placeMode, spawnCountMode, spawnCount, spawnCountMin, spawnCountMax,
 			spawnMonsterMode, spawnMonsterName, transitionTargetModule, transitionTargetMap,
-			existingMaps, selectedExisting, monsterOptions, saveMessage, saveError,
+			existingMaps, selectedExisting, monsterOptions, saveMessage, saveError, showSettings,
 			palette, modeLabel,
 			newGrid, selectBrush, setPlaceMode, paintTile, loadExisting, saveMap,
 			cellClass, cellTitle, cellEmoji, describeSpawn

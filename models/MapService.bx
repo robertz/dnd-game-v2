@@ -328,8 +328,8 @@ class singleton {
 	 *  this false does NOT clear an existing entry map; it just leaves this
 	 *  map as a non-entry (transition-only-reachable) one.
 	 */
-	function saveEditorMap( moduleSlug, moduleName, moduleDescription, mapSlug, mapName, width, height, chunkSize, grid, playerSpawn, opponentSpawn, transitions = [], spawnPoints = [], isEntry = false ) {
-		var moduleId = _upsertModule( arguments.moduleSlug, arguments.moduleName, arguments.moduleDescription );
+	function saveEditorMap( ownerUserId, moduleSlug, moduleName, moduleDescription, mapSlug, mapName, width, height, chunkSize, grid, playerSpawn, opponentSpawn, transitions = [], spawnPoints = [], isEntry = false ) {
+		var moduleId = _upsertModule( arguments.moduleSlug, arguments.moduleName, arguments.moduleDescription, arguments.ownerUserId );
 		var mapId = _upsertMap(
 			moduleId, arguments.mapSlug, arguments.mapName, arguments.width, arguments.height,
 			arguments.chunkSize, arguments.playerSpawn, arguments.opponentSpawn
@@ -402,8 +402,11 @@ class singleton {
 				{
 					"mapId": mapId, "x": s.x, "y": s.y,
 					"payload": JSONSerialize( {
-						"countMode": s.countMode, "count": s.count, "countMin": s.countMin, "countMax": s.countMax,
-						"monsterMode": s.monsterMode, "monsterName": s.monsterName
+						"countMode": s.countMode, "count": s.count,
+						"countMin": s.keyExists( "countMin" ) ? s.countMin : 1,
+						"countMax": s.keyExists( "countMax" ) ? s.countMax : 1,
+						"monsterMode": s.monsterMode,
+						"monsterName": s.keyExists( "monsterName" ) ? s.monsterName : ""
 					} )
 				},
 				{ datasource: "gameserver" }
@@ -414,10 +417,27 @@ class singleton {
 	}
 
 	/**
-	 * Inserts a new adventure module, or updates name/description if the
-	 * slug already exists. Returns the module's id either way.
+	 * Returns true if a module with this slug already exists — used by
+	 * mapeditor.bxm to decide whether an incoming save is a create (any
+	 * logged-in user may do this) or an edit of an existing module (only
+	 * its owner may).
 	 */
-	private function _upsertModule( slug, name, description ) {
+	function moduleExists( slug ) {
+		var existing = queryExecute(
+			"SELECT id FROM adventure_modules WHERE slug = :slug",
+			{ "slug": arguments.slug },
+			{ datasource: "gameserver" }
+		);
+		return existing.recordCount > 0;
+	}
+
+	/**
+	 * Inserts a new adventure module, or updates name/description if the
+	 * slug already exists. Returns the module's id either way. owner_user_id
+	 * is only set on insert — an existing module's owner is never
+	 * overwritten by a later save (the caller already verified ownership).
+	 */
+	private function _upsertModule( slug, name, description, ownerUserId ) {
 		var existing = queryExecute(
 			"SELECT id FROM adventure_modules WHERE slug = :slug",
 			{ "slug": arguments.slug },
@@ -432,8 +452,8 @@ class singleton {
 			return existing.id[ 1 ];
 		}
 		queryExecute(
-			"INSERT INTO adventure_modules (slug, name, description) VALUES (:slug, :name, :description)",
-			{ "slug": arguments.slug, "name": arguments.name, "description": arguments.description },
+			"INSERT INTO adventure_modules (slug, name, description, owner_user_id) VALUES (:slug, :name, :description, :ownerUserId)",
+			{ "slug": arguments.slug, "name": arguments.name, "description": arguments.description, "ownerUserId": arguments.ownerUserId },
 			{ datasource: "gameserver" }
 		);
 		var inserted = queryExecute(

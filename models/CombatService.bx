@@ -2254,6 +2254,8 @@ class singleton {
 			if ( !structKeyExists( defender, "xpAwarded" ) || !defender.xpAwarded ) {
 				defender.xpAwarded = true;
 				awardExperience( arguments.state, defender.xp );
+				_incrementCharacterStat( attacker.characterId, "monsters_killed" );
+				attacker.monstersKilled = ( structKeyExists( attacker, "monstersKilled" ) ? attacker.monstersKilled : 0 ) + 1;
 				if ( structKeyExists( arguments.state, "round" ) ) {
 					defender.defeatedAtRound = arguments.state.round;
 				}
@@ -3369,6 +3371,8 @@ class singleton {
 		if ( !structKeyExists( arguments.defender, "xpAwarded" ) || !arguments.defender.xpAwarded ) {
 			arguments.defender.xpAwarded = true;
 			awardExperience( arguments.state, arguments.defender.xp );
+			_incrementCharacterStat( arguments.state.player.characterId, "monsters_killed" );
+			arguments.state.player.monstersKilled = ( structKeyExists( arguments.state.player, "monstersKilled" ) ? arguments.state.player.monstersKilled : 0 ) + 1;
 			_grantMonsterLoot( arguments.state, arguments.defender );
 			// The round this opponent died — the sidebar keeps showing its
 			// (blinking-then-fading, via CSS) defeated card through the rest of
@@ -3417,6 +3421,8 @@ class singleton {
 			arguments.defender.isDying = false;
 			arguments.state.gameOver = true;
 			arguments.state.outcome = "defeat";
+			_incrementCharacterStat( arguments.defender.characterId, "deaths" );
+			arguments.defender.deaths = ( structKeyExists( arguments.defender, "deaths" ) ? arguments.defender.deaths : 0 ) + 1;
 			arguments.state.log.prepend( "#arguments.defender.name# dies." );
 		}
 	}
@@ -3468,6 +3474,8 @@ class singleton {
 		} else if ( player.deathSaveFailures >= 3 ) {
 			arguments.state.gameOver = true;
 			arguments.state.outcome = "defeat";
+			_incrementCharacterStat( player.characterId, "deaths" );
+			player.deaths = ( structKeyExists( player, "deaths" ) ? player.deaths : 0 ) + 1;
 			arguments.state.log.prepend( "#player.name# dies." );
 		}
 	}
@@ -3483,6 +3491,12 @@ class singleton {
 	function rollForInitiative( state ) {
 		var player = arguments.state.player;
 		var opponents = _stateOpponents( arguments.state );
+
+		// "Fought" is counted per encounter, not per kill — every opponent in
+		// this fight's roster, win or lose, the moment combat actually starts.
+		_incrementCharacterStat( player.characterId, "monsters_fought", opponents.len() );
+		player.monstersFought = ( structKeyExists( player, "monstersFought" ) ? player.monstersFought : 0 ) + opponents.len();
+
 		var playerRoll = rollInitiative( player );
 
 		var bestOpponentRoll = "";
@@ -3576,6 +3590,32 @@ class singleton {
 	 * @state The encounter's full mutable game state struct.
 	 * @xp The amount of XP being awarded.
 	 */
+	/**
+	 * Increments one of a character's lifetime counters (monsters_fought,
+	 * monsters_killed, deaths) directly in the DB, the same "persist as it
+	 * happens" pattern awardExperience() uses rather than waiting for
+	 * saveCharacterState() — these are per-event counters, not per-encounter
+	 * resource state, so they shouldn't be lost if the browser closes
+	 * mid-encounter. A no-op for a player with no characterId (e.g. a test
+	 * double), same guard awardExperience() applies via its own recordCount
+	 * check.
+	 *
+	 * @characterId characters.id.
+	 * @column One of "monsters_fought", "monsters_killed", "deaths" — never
+	 *  user input, so string-building the column name into the UPDATE is safe.
+	 * @amount How much to add (default 1).
+	 */
+	private function _incrementCharacterStat( characterId, column, amount = 1 ) {
+		if ( isNull( arguments.characterId ) || !len( arguments.characterId ) ) {
+			return;
+		}
+		queryExecute(
+			"UPDATE characters SET #arguments.column# = #arguments.column# + :amount WHERE id = :characterId",
+			{ "amount": arguments.amount, "characterId": arguments.characterId },
+			{ datasource: "gameserver" }
+		);
+	}
+
 	function awardExperience( state, xp ) {
 		var player = arguments.state.player;
 
@@ -5759,6 +5799,14 @@ class singleton {
 			"hpBonusPerLevel": arrayFindNoCase( speciesMechanics.traitNames, "Dwarven Toughness" ) > 0 ? 1 : 0,
 			"speed": row.speed[ 1 ],
 			"experiencePoints": row.experience_points[ 1 ],
+			// Lifetime counters, persisted directly as they happen (see
+			// _incrementCharacterStat()) rather than batched into
+			// saveCharacterState() — "monstersFought" is per-encounter (every
+			// opponent in the roster once combat starts), "monstersKilled" is
+			// per-kill, "deaths" increments each time this character has died.
+			"monstersFought": row.monsters_fought[ 1 ],
+			"monstersKilled": row.monsters_killed[ 1 ],
+			"deaths": row.deaths[ 1 ],
 			"savingThrowProficiencies": listToArray( row.saving_throw_proficiencies[ 1 ], " and ", false, true ),
 			// From background + species traits (see _skillProficienciesFromTraits())
 			// — doesn't include a class's own skill choices, since there's no

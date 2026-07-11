@@ -277,6 +277,243 @@ main.scroll {
 	box-shadow: 0 0 6px 1px var(--gold);
 }
 
+/* ── Map Editor ──────────────────────────────────────────────────────────
+   A dedicated layout, not the generic .encounter split: a compact top
+   toolbar, a collapsible settings drawer for the fields only touched once
+   (module/map identity, grid size), then a sidebar of tools sitting right
+   against the canvas — the specific complaint being fixed is the brush
+   palette living far above a full-width grid with no visual relationship
+   between them. */
+
+.mapeditor {
+	width: 100%;
+	display: flex;
+	flex-direction: column;
+	gap: 0.75rem;
+}
+
+.mapeditor-topbar {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	flex-wrap: wrap;
+	gap: 0.75rem;
+}
+
+.mapeditor-topbar h1 {
+	margin: 0;
+}
+
+.mapeditor-topbar-actions {
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+	flex-wrap: wrap;
+}
+
+.mapeditor-load-select {
+	max-width: 220px;
+}
+
+.mapeditor-banner {
+	margin: 0;
+	padding: 0.5rem 0.9rem;
+	font-size: 0.9rem;
+}
+
+.mapeditor-settings {
+	padding: 1rem 1.25rem;
+	animation: panel-in 0.2s var(--ease);
+}
+
+.mapeditor-settings-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+	gap: 0.6rem 1rem;
+	margin-bottom: 0.75rem;
+}
+
+.mapeditor-settings-grid label,
+.mapeditor-settings label {
+	display: flex;
+	flex-direction: column;
+	gap: 0.25rem;
+	font-size: 0.85rem;
+	color: var(--ink);
+}
+
+.mapeditor-body {
+	display: flex;
+	align-items: flex-start;
+	gap: 1rem;
+	width: 100%;
+}
+
+.mapeditor-sidebar {
+	flex: 0 0 260px;
+	width: 260px;
+	display: flex;
+	flex-direction: column;
+	gap: 0.75rem;
+	max-height: calc(100vh - 140px);
+	overflow-y: auto;
+	position: sticky;
+	top: 0.75rem;
+}
+
+.mapeditor-canvas {
+	flex: 1 1 auto;
+	margin: 0;
+	max-height: calc(100vh - 140px);
+	min-width: 0;
+}
+
+.editor-sidebar-section {
+	background:
+		radial-gradient( ellipse at top left, rgba(255,255,255,0.15), transparent 60% ),
+		linear-gradient( var(--parchment), var(--parchment-dark) );
+	color: var(--ink);
+	border: 2px solid var(--gold);
+	border-radius: var(--radius-md);
+	padding: 0.75rem 0.9rem;
+}
+
+.editor-sidebar-title {
+	margin: 0 0 0.6rem;
+	font-size: 0.95rem;
+}
+
+.palette-grid {
+	display: grid;
+	grid-template-columns: repeat(3, 1fr);
+	gap: 0.4rem;
+}
+
+.palette-swatch-btn {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 0.25rem;
+	background: rgba(0, 0, 0, 0.05);
+	border: 2px solid transparent;
+	border-radius: var(--radius-sm);
+	padding: 0.35rem 0.2rem;
+	cursor: pointer;
+	transition: border-color var(--speed) var(--ease), background var(--speed) var(--ease), transform var(--speed) var(--ease);
+}
+
+.palette-swatch-btn:hover {
+	transform: translateY(-1px);
+	background: rgba(0, 0, 0, 0.1);
+}
+
+.palette-swatch-btn-selected {
+	border-color: var(--gold);
+	box-shadow: 0 0 6px 1px var(--gold);
+	background: rgba(185, 146, 47, 0.15);
+}
+
+.palette-swatch-preview {
+	width: 28px;
+	height: 28px;
+	flex: none;
+	pointer-events: none;
+}
+
+.palette-swatch-label {
+	font-size: 0.65rem;
+	line-height: 1;
+	color: var(--ink);
+	text-align: center;
+}
+
+.tool-btn-col {
+	display: flex;
+	flex-direction: column;
+	gap: 0.4rem;
+}
+
+.tool-btn {
+	width: 100%;
+	text-align: left;
+}
+
+.editor-mode-hint {
+	font-style: italic;
+	font-size: 0.8rem;
+	color: var(--blood);
+	margin: 0.5rem 0 0;
+}
+
+.editor-tool-options {
+	display: flex;
+	flex-direction: column;
+	gap: 0.5rem;
+	margin-top: 0.6rem;
+	padding-top: 0.6rem;
+	border-top: 1px solid rgba(110, 20, 20, 0.25);
+}
+
+.editor-tool-options label {
+	display: flex;
+	flex-direction: column;
+	gap: 0.2rem;
+	font-size: 0.8rem;
+	color: var(--ink);
+}
+
+.editor-tool-options-row {
+	display: flex;
+	gap: 0.5rem;
+}
+
+.editor-tool-options-row label {
+	flex: 1;
+}
+
+.editor-marker-list {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 0.35rem;
+	max-height: 220px;
+	overflow-y: auto;
+}
+
+.editor-marker-row {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 0.4rem;
+	font-size: 0.78rem;
+	color: var(--ink);
+	background: rgba(0, 0, 0, 0.05);
+	border-radius: var(--radius-sm);
+	padding: 0.3rem 0.5rem;
+}
+
+.editor-marker-row .btn {
+	flex: none;
+	padding: 0.1rem 0.5rem;
+}
+
+@media (max-width: 900px) {
+	.mapeditor-body {
+		flex-direction: column;
+	}
+	.mapeditor-sidebar {
+		width: 100%;
+		flex: 1 1 auto;
+		max-height: none;
+		position: static;
+	}
+	.mapeditor-canvas {
+		max-height: min(60vh, 600px);
+	}
+}
+
 .battle-grid {
 	display: grid;
 	gap: 2px;
@@ -945,6 +1182,10 @@ main.scroll {
 
 .char-card-stats strong {
 	color: var(--gold);
+}
+
+.char-battle-record {
+	margin-bottom: 0.6rem;
 }
 
 .ability-row {

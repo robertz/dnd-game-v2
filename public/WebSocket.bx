@@ -5,6 +5,10 @@ class extends="modules.socketbox.models.WebSocketCore" {
 	}
 
 	public function onConnect( required channel ) {
+		if ( !structKeyExists( application, "wsChannelUsers" ) ) {
+			application.wsChannelUsers = {};
+		}
+		application.wsChannelUsers[ channel.hashCode() ] = structKeyExists( session, "userId" ) ? session.userId : 0;
 	}
 
 	public function onMessage( required message, required channel ) {
@@ -13,6 +17,12 @@ class extends="modules.socketbox.models.WebSocketCore" {
 
 		if ( isSimpleValue( state ) ) {
 			sendMessage( jsonSerialize( { "type": "error", "message": "No active encounter" } ), channel );
+			return;
+		}
+
+		var channelUserId = structKeyExists( application, "wsChannelUsers" ) ? ( application.wsChannelUsers[ channel.hashCode() ] ?: 0 ) : 0;
+		if ( !channelUserId || channelUserId != ( state.ownerUserId ?: 0 ) ) {
+			sendMessage( jsonSerialize( { "type": "error", "message": "Unauthorized" } ), channel );
 			return;
 		}
 
@@ -100,6 +110,9 @@ class extends="modules.socketbox.models.WebSocketCore" {
 	}
 
 	public function onClose( required channel ) {
+		if ( structKeyExists( application, "wsChannelUsers" ) ) {
+			application.wsChannelUsers.delete( channel.hashCode() );
+		}
 	}
 
 	// ── Private helpers ───────────────────────────────────────────────────────

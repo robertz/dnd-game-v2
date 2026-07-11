@@ -1,0 +1,35 @@
+<bx:header name="Content-Type" value="application/json">
+<bx:script>
+
+	auth = new models.AuthService();
+
+	if ( cgi.request_method == "GET" ) {
+		userId = auth.currentUserId();
+		writeOutput( jsonSerialize( userId ? { "userId": userId, "username": auth.currentUsername() } : {} ) );
+		return;
+	}
+
+	body = jsonDeserialize( getHttpRequestData().content );
+	action = body.action ?: "";
+
+	try {
+		switch ( action ) {
+			case "register":
+				userId = auth.register( body.username ?: "", body.password ?: "" );
+				writeOutput( jsonSerialize( { "userId": userId, "username": auth.currentUsername() } ) );
+				break;
+			case "login":
+				userId = auth.login( body.username ?: "", body.password ?: "" );
+				writeOutput( jsonSerialize( { "userId": userId, "username": auth.currentUsername() } ) );
+				break;
+			case "logout":
+				auth.logout();
+				writeOutput( jsonSerialize( { "ok": true } ) );
+				break;
+			default:
+				writeOutput( jsonSerialize( { "error": "Unknown action." } ) );
+		}
+	} catch ( any e ) {
+		writeOutput( jsonSerialize( { "error": e.message } ) );
+	}
+</bx:script>
