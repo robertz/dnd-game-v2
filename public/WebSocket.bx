@@ -222,7 +222,12 @@ class extends="modules.socketbox.models.WebSocketCore" {
 			return;
 		}
 		arguments.state.opponent = arguments.state.opponents[ arguments.state.selectedOpponentIndex ];
-		arguments.combatService.castLeveledSpell( arguments.state, arguments.data.spellName );
+		var healTarget = javaCast( "null", 0 );
+		var targetPlayerIndex = int( val( arguments.data.targetPlayerIndex ?: 0 ) );
+		if ( targetPlayerIndex >= 1 && targetPlayerIndex <= arguments.state.players.len() ) {
+			healTarget = arguments.state.players[ targetPlayerIndex ];
+		}
+		arguments.combatService.castLeveledSpell( arguments.state, arguments.data.spellName, healTarget );
 		arguments.state.selectedOpponentIndex = arguments.state.opponent.mobIndex;
 		if ( !arguments.state.gameOver && arguments.combatService.allPlayersExhausted( arguments.state ) ) {
 			arguments.combatService.endPlayerTurn( arguments.state );

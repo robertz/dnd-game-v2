@@ -724,7 +724,10 @@ class singleton {
 			arguments.opponent.knownLeveledSpell.type == "heal" && arguments.opponent.hitPoints <= arguments.opponent.maxHitPoints / 2 &&
 			hasSpellResource( arguments.opponent, 1 )
 		) {
-			_castLeveledSpellFor( arguments.state, arguments.opponent, player, true, arguments.opponent.knownLeveledSpell );
+			// Self-heal: the opponent is its own target here, not its aggro
+			// target — a monster casting Cure Wounds heals itself, it doesn't
+			// heal the party member it's fighting.
+			_castLeveledSpellFor( arguments.state, arguments.opponent, arguments.opponent, false, arguments.opponent.knownLeveledSpell );
 			return;
 		}
 
@@ -3262,17 +3265,25 @@ class singleton {
 	}
 
 	/**
-	 * Casts one of the player's known leveled spells at the opponent, by
-	 * name — a thin wrapper around `_castLeveledSpellFor()`. Same
-	 * defaults-to-first-known behavior as castCantrip().
+	 * Casts one of the player's known leveled spells, by name — a thin
+	 * wrapper around `_castLeveledSpellFor()`. Same defaults-to-first-known
+	 * behavior as castCantrip(). For a damage/save spell this always
+	 * targets `state.opponent`; for a heal spell it targets `healTarget` if
+	 * given (any living party member — see WebSocket.bx's
+	 * _handleCastSpell()), or the caster themself otherwise.
 	 *
 	 * @state The encounter's full mutable game state struct.
 	 * @name The exact name of a spell in `state.player.knownLeveledSpells`.
+	 * @healTarget Optional: the party member struct to heal, for a heal-type spell.
 	 */
-	function castLeveledSpell( state, name = "" ) {
+	function castLeveledSpell( state, name = "", healTarget = javaCast( "null", 0 ) ) {
 		var spell = _findKnownSpell( arguments.state.player, "knownLeveledSpells", arguments.name );
 		if ( !isNull( spell ) ) {
-			_castLeveledSpellFor( arguments.state, arguments.state.player, arguments.state.opponent, false, spell );
+			var defender = arguments.state.opponent;
+			if ( spell.type == "heal" ) {
+				defender = isNull( arguments.healTarget ) ? arguments.state.player : arguments.healTarget;
+			}
+			_castLeveledSpellFor( arguments.state, arguments.state.player, defender, false, spell );
 		}
 	}
 
@@ -3342,20 +3353,24 @@ class singleton {
 	/**
 	 * Casts `spell` (from `attacker.knownLeveledSpells`, or a monster's own
 	 * `attacker.knownLeveledSpell`) — either at `defender` (a damage spell
-	 * like Magic Missile) or on `attacker` themself (a healing spell like
-	 * Cure Wounds/Healing Word), per `spell.type`. Spends a slot at
-	 * `spell.level` if the caster has one; otherwise falls back to Magic
-	 * Initiate's separate once-per-encounter bonus spell, if available and
-	 * unused. A no-op if neither resource is available. If `spell.
-	 * concentration` is true and the cast goes through, starts
-	 * concentrating on it (see _startConcentrating()), dropping whatever the
-	 * caster was concentrating on before. Used for both the player (via
-	 * castLeveledSpell()) and any spellcasting monster (via runEnemyTurn()).
+	 * like Magic Missile) or heals `defender` (a healing spell like Cure
+	 * Wounds/Healing Word — the caster themself by default, or any living
+	 * ally if one was explicitly chosen, see castLeveledSpell()), per
+	 * `spell.type`. Spends a slot at `spell.level` if the caster has one;
+	 * otherwise falls back to Magic Initiate's separate once-per-encounter
+	 * bonus spell, if available and unused. A no-op if neither resource is
+	 * available. If `spell.concentration` is true and the cast goes
+	 * through, starts concentrating on it (see _startConcentrating()),
+	 * dropping whatever the caster was concentrating on before. Used for
+	 * both the player (via castLeveledSpell()) and any spellcasting monster
+	 * (via runEnemyTurn() — a self-heal passes the monster itself as
+	 * `defender`, not its aggro target).
 	 *
 	 * @state The encounter's full mutable game state struct.
 	 * @attacker The casting combatant.
-	 * @defender The combatant targeted if this turns out to be a damage spell.
-	 * @defenderIsPlayer Whether `defender` is `state.player` — decides whether reaching 0 HP means defeat (with Relentless Endurance) or victory/XP.
+	 * @defender The spell's target: an opponent for a damage/save spell, or
+	 *  whoever's being healed for a heal spell.
+	 * @defenderIsPlayer Whether `defender` is on the player's side — decides whether reaching 0 HP means defeat (with Relentless Endurance) or victory/XP. Unused for a heal spell (healing never reduces HP).
 	 * @spell The spell struct to cast (see _spellStructFromRow()).
 	 */
 	private function _castLeveledSpellFor( state, attacker, defender, defenderIsPlayer, spell ) {
@@ -3386,7 +3401,7 @@ class singleton {
 		var spell = arguments.spell;
 		var resourceNote = usedMagicInitiate ? " (Magic Initiate's bonus spell)" : " (spends a level-#slotSpent# slot)";
 		if ( spell.type == "heal" ) {
-			_castHealSpell( arguments.state, arguments.attacker, spell.name, resourceNote, spell.diceCount, spell.diceSides );
+			_castHealSpell( arguments.state, arguments.attacker, arguments.defender, spell.name, resourceNote, spell.diceCount, spell.diceSides );
 		} else if ( spell.type == "attack" ) {
 			_castAttackSpell( arguments.state, arguments.attacker, arguments.defender, arguments.defenderIsPlayer, spell.name, spell.diceCount, spell.diceSides, spell.damageType, resourceNote );
 		} else if ( spell.type == "save" ) {
@@ -3489,15 +3504,29 @@ class singleton {
 	}
 
 	/**
-	 * Cure Wounds/Healing Word-style heal: heals the caster (this app is a
-	 * 1-on-1 encounter, so there's no ally to target) for `diceCount`d`diceSides`
-	 * plus their spellcasting ability modifier Hit Points, capped at their maximum.
+	 * Cure Wounds/Healing Word-style heal: heals `target` (the caster
+	 * themself, an ally, or — for a monster's own self-heal — itself, see
+	 * _runOneOpponentTurn()) for `diceCount`d`diceSides` plus the caster's
+	 * spellcasting ability modifier Hit Points, capped at `target`'s
+	 * maximum. Healing a downed (0 HP) target back above 0 revives them —
+	 * clears the dying/stable state and death save counters, same as a
+	 * natural 20 on rollDeathSave().
 	 */
-	private function _castHealSpell( state, attacker, spellName, resourceNote, diceCount, diceSides ) {
+	private function _castHealSpell( state, attacker, target, spellName, resourceNote, diceCount, diceSides ) {
 		var healing = rollSum( arguments.diceCount, arguments.diceSides ) + arguments.attacker.modifiers[ arguments.attacker.spellcastingAbility ];
-		arguments.attacker.hitPoints = min( arguments.attacker.maxHitPoints, arguments.attacker.hitPoints + healing );
+		var wasDown = arguments.target.hitPoints <= 0;
+		arguments.target.hitPoints = min( arguments.target.maxHitPoints, arguments.target.hitPoints + healing );
+		if ( wasDown && arguments.target.hitPoints > 0 ) {
+			arguments.target.isDying = false;
+			arguments.target.isStable = false;
+			arguments.target.deathSaveSuccesses = 0;
+			arguments.target.deathSaveFailures = 0;
+		}
+		var selfCast = ( arguments.target.name == arguments.attacker.name );
 		arguments.state.log.prepend(
-			"#arguments.attacker.name# casts #arguments.spellName##arguments.resourceNote#, healing #healing# Hit Points (#arguments.attacker.hitPoints#/#arguments.attacker.maxHitPoints# HP)."
+			selfCast
+				? "#arguments.attacker.name# casts #arguments.spellName##arguments.resourceNote#, healing #healing# Hit Points (#arguments.target.hitPoints#/#arguments.target.maxHitPoints# HP)."
+				: "#arguments.attacker.name# casts #arguments.spellName##arguments.resourceNote# on #arguments.target.name#, healing #healing# Hit Points (#arguments.target.hitPoints#/#arguments.target.maxHitPoints# HP)."
 		);
 	}
 

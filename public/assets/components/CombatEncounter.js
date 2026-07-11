@@ -151,7 +151,7 @@ const CombatEncounter = {
 												type="button" class="btn btn-attack"
 												:disabled="!hasSpellResource(spell.level)"
 												:title="describeSpell(spell)"
-												@click="ws('cast_spell',{spellName:spell.name})">Cast {{ spell.name }}</button>
+												@click="castLeveledSpell(spell)">Cast {{ spell.name }}{{ spell.type === 'heal' && partyMembers.length > 1 ? ' on ' + healTargetName : '' }}</button>
 										</template>
 									</template>
 								</div>
@@ -209,6 +209,14 @@ const CombatEncounter = {
 							@click="selectActiveCharacter(memberIdx+1)"
 						>
 							<h2 class="fantasy-heading">{{ member.name }}{{ (memberIdx+1) === cs.activePlayerIndex ? ' ⚔' : '' }}</h2>
+							<button
+								v-if="partyMembers.length > 1"
+								type="button"
+								class="btn btn-sm heal-target-toggle"
+								:class="{ 'heal-target-toggle-active': isHealTarget(memberIdx+1) }"
+								:title="'Target ' + member.name + ' for healing spells'"
+								@click.stop="healTargetIndex = memberIdx+1"
+							>💚 {{ isHealTarget(memberIdx+1) ? 'Heal target' : 'Target for heal' }}</button>
 							<p class="stat-subtitle">Level {{ member.level }} {{ member.class }}{{ member.hitPoints <= 0 ? ' — Unconscious' : (foeBloodied(member) ? ' — Bloodied' : '') }}</p>
 							<div class="hp-bar"><div :class="['hp-bar-fill', foeBloodied(member) ? 'hp-bar-fill-bloodied' : '']" :style="{ width: Math.max(0, member.hitPoints) / member.maxHitPoints * 100 + '%' }"></div></div>
 							<div class="stat-inline">
@@ -520,6 +528,31 @@ const CombatEncounter = {
 			return ( cs.player && cs.player.name ) ? [ cs.player ] : [];
 		} );
 
+		// Who a heal spell targets — 1-based index into partyMembers, or null
+		// for "the caster themself" (the server's own default when no target
+		// is sent). Purely a UI selection; the server re-validates it exists.
+		const healTargetIndex = ref( null );
+
+		function isHealTarget( idx ) {
+			return healTargetIndex.value === idx;
+		}
+
+		const healTargetName = computed( () => {
+			if ( healTargetIndex.value ) {
+				const target = partyMembers.value[ healTargetIndex.value - 1 ];
+				if ( target ) return target.name;
+			}
+			return cs.player.name;
+		} );
+
+		function castLeveledSpell( spell ) {
+			const extra = { spellName: spell.name };
+			if ( spell.type === "heal" && healTargetIndex.value ) {
+				extra.targetPlayerIndex = healTargetIndex.value;
+			}
+			ws( "cast_spell", extra );
+		}
+
 		// Non-active party members' tiles, keyed like foeByTile — the active
 		// member's own tile is handled separately (tile-player/⚔) since it's
 		// also the movement/camera anchor.
@@ -755,6 +788,7 @@ const CombatEncounter = {
 			canRest, maxRestDice, hoursUntilNextLongRest, gameClockLabel,
 			tileClass, tileTitle, tileEmoji, tileClick, selectActiveCharacter,
 			playerHasFeature, hasSpellResource, itemIsUsable, describeSpell,
+			healTargetIndex, isHealTarget, healTargetName, castLeveledSpell,
 			ws, startAutoBattle, stopAutoBattle, confirmAsi, confirmFeat, toggleAsiSkill
 		};
 	}
