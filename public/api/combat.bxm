@@ -37,7 +37,7 @@
 	}
 	map = len( moduleSlug )
 		? mapService.getModuleMap( moduleSlug, mapSlug )
-		: mapService.getLevel( "grandDungeon" );
+		: mapService.getLevel( "openField" );
 
 	player.position = { "x": map.playerSpawn.x, "y": map.playerSpawn.y };
 

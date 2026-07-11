@@ -31,13 +31,6 @@ const ModuleSelect = {
 					</template>
 				</template>
 
-				<div class="turn-actions">
-					<div class="creation-card" @click="classicDungeon()">
-						<h3 class="fantasy-heading">Classic Dungeon</h3>
-						<p class="stat-subtitle">The original hand-built dungeon crawl.</p>
-					</div>
-				</div>
-
 				<div class="turn-actions" style="margin-top: 1.5rem;">
 					<router-link class="btn" to="/character/sheet">Back to Character</router-link>
 				</div>
@@ -68,12 +61,6 @@ const ModuleSelect = {
 			router.push( "/combat" );
 		}
 
-		function classicDungeon() {
-			localStorage.removeItem( "moduleSlug" );
-			localStorage.removeItem( "mapSlug" );
-			router.push( "/combat" );
-		}
-
-		return { modules, loading, error, chooseModule, classicDungeon };
+		return { modules, loading, error, chooseModule };
 	}
 };
