@@ -106,53 +106,69 @@ const CombatEncounter = {
 				</p>
 
 				<!-- Action bar -->
-				<div v-if="!cs.gameOver && cs.initiativeRolled" class="turn-actions">
+				<div v-if="!cs.gameOver && cs.initiativeRolled" class="turn-actions action-bar">
 					<template v-if="cs.autoBattling">
-						<div class="auto-battle-indicator">⚔ Auto-battling…</div>
-						<button type="button" class="btn btn-end-turn" @click="stopAutoBattle()">Stop</button>
+						<div class="action-group">
+							<div class="auto-battle-indicator">⚔ Auto-battling…</div>
+							<button type="button" class="btn btn-end-turn" @click="stopAutoBattle()">Stop</button>
+						</div>
 					</template>
 					<template v-else>
 						<template v-if="cs.currentTurn === 'player'">
 							<template v-if="cs.player.isDying">
-								<button type="button" class="btn btn-attack" @click="ws('death_save')">Make Death Saving Throw</button>
+								<div class="action-group">
+									<button type="button" class="btn btn-attack" @click="ws('death_save')">Make Death Saving Throw</button>
+								</div>
 							</template>
 							<template v-else-if="cs.player.hitPoints <= 0">
 								<p class="encounter-intro">{{ cs.player.name }} is stabilized but unconscious.</p>
-								<button type="button" class="btn btn-end-turn" @click="ws('end_turn')">End Turn</button>
+								<div class="action-bar-end">
+									<button type="button" class="btn btn-end-turn" @click="ws('end_turn')">End Turn</button>
+								</div>
 							</template>
 							<template v-else>
-								<template v-if="remainingAttacks > 0 && (!cs.actionUsed || cs.attacksUsedThisTurn > 0)">
-									<button type="button" class="btn btn-attack" @click="ws('attack')">Attack{{ remainingAttacks > 1 ? ' (' + remainingAttacks + ' left)' : '' }}</button>
-									<template v-if="playerHasFeature(\`Paladin's Smite\`) && cs.player.spellSlots">
-										<button v-for="(count, level) in cs.player.spellSlots" :key="'smite'+level" v-show="count > 0"
-											type="button" class="btn btn-attack" @click="ws('smite',{slotLevel:level})">Smite (Lv {{ level }})</button>
+								<div v-if="hasActionOptions" class="action-group">
+									<span class="action-group-label">Action</span>
+									<template v-if="remainingAttacks > 0 && (!cs.actionUsed || cs.attacksUsedThisTurn > 0)">
+										<button type="button" class="btn btn-attack" @click="ws('attack')">Attack{{ remainingAttacks > 1 ? ' (' + remainingAttacks + ' left)' : '' }}</button>
+										<template v-if="playerHasFeature(\`Paladin's Smite\`) && cs.player.spellSlots">
+											<button v-for="(count, level) in cs.player.spellSlots" :key="'smite'+level" v-show="count > 0"
+												type="button" class="btn btn-attack" @click="ws('smite',{slotLevel:level})">Smite (Lv {{ level }})</button>
+										</template>
 									</template>
-								</template>
-								<template v-if="!cs.actionUsed">
-									<button v-if="cs.player.hasGrapplerFeat" type="button" class="btn btn-attack" @click="ws('grapple')">Grapple</button>
-									<button type="button" class="btn btn-attack" @click="ws('shove')">Shove</button>
-									<button v-if="cs.player.hasBreathWeapon && !cs.player.usedBreathWeapon" type="button" class="btn btn-attack" @click="ws('breath_weapon')">Breath Weapon</button>
-									<template v-if="cs.player.knownCantrips">
-										<button v-for="cantrip in cs.player.knownCantrips" :key="cantrip.name"
-											type="button" class="btn btn-attack"
-											:title="describeSpell(cantrip)"
-											@click="ws('cast_cantrip',{spellName:cantrip.name})">Cast {{ cantrip.name }}</button>
+									<template v-if="!cs.actionUsed">
+										<button v-if="cs.player.hasGrapplerFeat" type="button" class="btn btn-attack" @click="ws('grapple')">Grapple</button>
+										<button type="button" class="btn btn-attack" @click="ws('shove')">Shove</button>
+										<button v-if="cs.player.hasBreathWeapon && !cs.player.usedBreathWeapon" type="button" class="btn btn-attack" @click="ws('breath_weapon')">Breath Weapon</button>
+										<template v-if="cs.player.knownCantrips">
+											<button v-for="cantrip in cs.player.knownCantrips" :key="cantrip.name"
+												type="button" class="btn btn-attack"
+												:title="describeSpell(cantrip)"
+												@click="ws('cast_cantrip',{spellName:cantrip.name})">Cast {{ cantrip.name }}</button>
+										</template>
+										<template v-if="cs.player.knownLeveledSpells">
+											<button v-for="spell in cs.player.knownLeveledSpells" :key="spell.name"
+												type="button" class="btn btn-attack"
+												:disabled="!hasSpellResource(spell.level)"
+												:title="describeSpell(spell)"
+												@click="ws('cast_spell',{spellName:spell.name})">Cast {{ spell.name }}</button>
+										</template>
 									</template>
-									<template v-if="cs.player.knownLeveledSpells">
-										<button v-for="spell in cs.player.knownLeveledSpells" :key="spell.name"
-											type="button" class="btn btn-attack"
-											:disabled="!hasSpellResource(spell.level)"
-											:title="describeSpell(spell)"
-											@click="ws('cast_spell',{spellName:spell.name})">Cast {{ spell.name }}</button>
+								</div>
+
+								<div v-if="hasBonusOptions" class="action-group">
+									<span class="action-group-label">Bonus</span>
+									<button v-if="canOffHandAttack" type="button" class="btn btn-attack" @click="ws('off_hand_attack')">Off-Hand Attack</button>
+									<template v-if="!cs.bonusActionUsed">
+										<button v-if="playerHasFeature('Second Wind') && !cs.player.usedSecondWind" type="button" class="btn btn-attack" @click="ws('second_wind')">Second Wind</button>
+										<button v-if="playerHasFeature('Rage') && !cs.player.isRaging && cs.player.ragesRemaining > 0" type="button" class="btn btn-attack" @click="ws('start_rage')">Rage ({{ cs.player.ragesRemaining }} left)</button>
 									</template>
-								</template>
-								<button v-if="canOffHandAttack" type="button" class="btn btn-attack" @click="ws('off_hand_attack')">Off-Hand Attack</button>
-								<template v-if="!cs.bonusActionUsed">
-									<button v-if="playerHasFeature('Second Wind') && !cs.player.usedSecondWind" type="button" class="btn btn-attack" @click="ws('second_wind')">Second Wind</button>
-									<button v-if="playerHasFeature('Rage') && !cs.player.isRaging && cs.player.ragesRemaining > 0" type="button" class="btn btn-attack" @click="ws('start_rage')">Rage ({{ cs.player.ragesRemaining }} left)</button>
-								</template>
-								<button v-if="cs.player.isRaging" type="button" class="btn btn-attack" @click="ws('end_rage')">End Rage</button>
-								<button type="button" class="btn btn-end-turn" @click="ws('end_turn')">End Turn</button>
+									<button v-if="cs.player.isRaging" type="button" class="btn btn-attack" @click="ws('end_rage')">End Rage</button>
+								</div>
+
+								<div class="action-bar-end">
+									<button type="button" class="btn btn-end-turn" @click="ws('end_turn')">End Turn</button>
+								</div>
 							</template>
 						</template>
 					</template>
@@ -161,9 +177,9 @@ const CombatEncounter = {
 				<!-- Rest bar — shown while exploring, and mid-encounter whenever no
 				     mob is aware of the player (canRest tracks player.inCombat,
 				     which the server clears once nothing has sight of you) -->
-				<div v-if="!cs.gameOver && canRest" class="turn-actions rest-bar" style="align-items:center;flex-wrap:wrap;">
-					<span class="stat-subtitle" style="margin:0;">{{ gameClockLabel }}</span>
-					<span class="stat-subtitle" style="margin:0;">HD:
+				<div v-if="!cs.gameOver && canRest" class="turn-actions rest-bar">
+					<span class="stat-subtitle">{{ gameClockLabel }}</span>
+					<span class="stat-subtitle">HD:
 						<button type="button" class="btn btn-sm" :disabled="restDiceCount <= 0" @click="restDiceCount--">-</button>
 						{{ restDiceCount }}
 						<button type="button" class="btn btn-sm" :disabled="restDiceCount >= maxRestDice" @click="restDiceCount++">+</button>
@@ -588,6 +604,20 @@ const CombatEncounter = {
 			return true;
 		} );
 
+		// Gate the "Action"/"Bonus" action-bar groups on whether any button
+		// inside them would actually render, so a spent action/bonus action
+		// doesn't leave a bare group label with nothing under it.
+		const hasActionOptions = computed( () => {
+			if ( !cs.player ) return false;
+			const canAttack = remainingAttacks.value > 0 && ( !cs.actionUsed || cs.attacksUsedThisTurn > 0 );
+			return canAttack || !cs.actionUsed;
+		} );
+
+		const hasBonusOptions = computed( () => {
+			if ( !cs.player ) return false;
+			return canOffHandAttack.value || cs.player.isRaging;
+		} );
+
 		const canRest = computed( () => {
 			const p = cs.player;
 			if ( !p ) return false;
@@ -657,6 +687,7 @@ const CombatEncounter = {
 			asiMode, asiAbility1, asiAbility2, asiSelectedFeat, asiSelectedSkills, restDiceCount,
 			abilityAbbrs, ALL_SKILLS, availableLevelUpFeats,
 			playerBloodied, visibleFoes, foeBloodied, remainingAttacks, canOffHandAttack,
+			hasActionOptions, hasBonusOptions,
 			canRest, maxRestDice, hoursUntilNextLongRest, gameClockLabel,
 			tileClass, tileTitle, tileEmoji, tileClick,
 			playerHasFeature, hasSpellResource, itemIsUsable, describeSpell,

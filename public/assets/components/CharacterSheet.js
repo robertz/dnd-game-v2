@@ -1,18 +1,22 @@
 const CharacterSheet = {
 	template: `
 		<div class="encounter">
-			<div class="encounter-main">
-				<template v-if="loading">
+			<template v-if="loading">
+				<div class="encounter-main">
 					<loading-veil label="Unfurling the character sheet..." />
-				</template>
+				</div>
+			</template>
 
-				<template v-else-if="error">
+			<template v-else-if="error">
+				<div class="encounter-main">
 					<p class="encounter-intro">{{ error }}</p>
-				</template>
+				</div>
+			</template>
 
-				<template v-else-if="character.name">
+			<template v-else-if="character.name">
+				<div class="encounter-main">
 
-					<div class="parchment-panel" style="margin-bottom:1rem;">
+					<div class="parchment-panel sheet-header">
 						<h2 class="fantasy-heading" style="margin:0 0 0.3rem;">{{ character.name }}</h2>
 						<p class="stat-subtitle" style="margin:0;">
 							<template v-if="character.classes && character.classes.length > 1">
@@ -30,9 +34,9 @@ const CharacterSheet = {
 					</div>
 
 					<!-- Pending choices -->
-					<div v-if="character.multiclassOptions && character.multiclassOptions.length" class="parchment-panel asi-panel" style="margin-bottom:1rem;">
-						<h3 class="fantasy-heading" style="margin:0 0 0.3rem;">Multiclass</h3>
-						<p class="stat-subtitle" style="margin:0 0 0.5rem;">Your ability scores qualify you to multiclass into one of these. Pick one to queue your next level there.</p>
+					<div v-if="character.multiclassOptions && character.multiclassOptions.length" class="sheet-choice-panel">
+						<h3 class="fantasy-heading sheet-choice-title">Multiclass</h3>
+						<p class="stat-subtitle sheet-choice-hint">Your ability scores qualify you to multiclass into one of these. Pick one to queue your next level there.</p>
 						<div class="creation-grid">
 							<div v-for="opt in character.multiclassOptions" :key="opt.id"
 								class="creation-card creation-card-compact"
@@ -42,8 +46,8 @@ const CharacterSheet = {
 						</div>
 					</div>
 
-					<div v-if="character.nextLevelOptions && character.nextLevelOptions.length > 1" class="parchment-panel asi-panel" style="margin-bottom:1rem;">
-						<h3 class="fantasy-heading" style="margin:0 0 0.3rem;">Next Level Goes To</h3>
+					<div v-if="character.nextLevelOptions && character.nextLevelOptions.length > 1" class="sheet-choice-panel">
+						<h3 class="fantasy-heading sheet-choice-title">Next Level Goes To</h3>
 						<div class="creation-grid">
 							<div v-for="opt in character.nextLevelOptions" :key="opt.classId"
 								:class="['creation-card','creation-card-compact', opt.classId === character.nextLevelClassId ? 'creation-card-selected' : '']"
@@ -52,8 +56,8 @@ const CharacterSheet = {
 						</div>
 					</div>
 
-					<div v-if="character.subclassChoice && character.subclassChoice.pending" class="parchment-panel asi-panel" style="margin-bottom:1rem;">
-						<h3 class="fantasy-heading" style="margin:0 0 0.3rem;">Choose Your Subclass</h3>
+					<div v-if="character.subclassChoice && character.subclassChoice.pending" class="sheet-choice-panel">
+						<h3 class="fantasy-heading sheet-choice-title">Choose Your Subclass</h3>
 						<div class="creation-grid">
 							<div v-for="opt in character.subclassChoice.availableSubclasses" :key="opt.id"
 								class="creation-card creation-card-compact"
@@ -63,8 +67,8 @@ const CharacterSheet = {
 						</div>
 					</div>
 
-					<div v-if="character.fightingStyleChoice && character.fightingStyleChoice.pending" class="parchment-panel asi-panel" style="margin-bottom:1rem;">
-						<h3 class="fantasy-heading" style="margin:0 0 0.3rem;">Choose Your Fighting Style</h3>
+					<div v-if="character.fightingStyleChoice && character.fightingStyleChoice.pending" class="sheet-choice-panel">
+						<h3 class="fantasy-heading sheet-choice-title">Choose Your Fighting Style</h3>
 						<div class="creation-grid">
 							<div v-for="style in character.fightingStyleChoice.availableStyles" :key="style"
 								class="creation-card creation-card-compact"
@@ -73,8 +77,8 @@ const CharacterSheet = {
 						</div>
 					</div>
 
-					<div v-if="cantripChoice.pending" class="parchment-panel asi-panel" style="margin-bottom:1rem;">
-						<h3 class="fantasy-heading" style="margin:0 0 0.3rem;">Learn a Cantrip</h3>
+					<div v-if="cantripChoice.pending" class="sheet-choice-panel">
+						<h3 class="fantasy-heading sheet-choice-title">Learn a Cantrip</h3>
 						<div class="creation-grid">
 							<div v-for="opt in cantripChoice.availableCantrips" :key="opt.name"
 								class="creation-card creation-card-compact"
@@ -84,8 +88,8 @@ const CharacterSheet = {
 						</div>
 					</div>
 
-					<div v-if="spellChoice.pending" class="parchment-panel asi-panel" style="margin-bottom:1rem;">
-						<h3 class="fantasy-heading" style="margin:0 0 0.3rem;">Learn a Level {{ spellChoice.level }} Spell</h3>
+					<div v-if="spellChoice.pending" class="sheet-choice-panel">
+						<h3 class="fantasy-heading sheet-choice-title">Learn a Level {{ spellChoice.level }} Spell</h3>
 						<div class="creation-grid">
 							<div v-for="opt in spellChoice.availableSpells" :key="opt.name"
 								class="creation-card creation-card-compact"
@@ -95,8 +99,8 @@ const CharacterSheet = {
 						</div>
 					</div>
 
-					<div v-if="expertiseChoice.pending" class="parchment-panel asi-panel" style="margin-bottom:1rem;">
-						<h3 class="fantasy-heading" style="margin:0 0 0.3rem;">Choose Expertise</h3>
+					<div v-if="expertiseChoice.pending" class="sheet-choice-panel">
+						<h3 class="fantasy-heading sheet-choice-title">Choose Expertise</h3>
 						<div class="creation-grid">
 							<div v-for="skill in expertiseChoice.availableSkills" :key="skill"
 								class="creation-card creation-card-compact"
@@ -105,8 +109,8 @@ const CharacterSheet = {
 						</div>
 					</div>
 
-					<div v-if="magicInitiateChoice.pendingCantrips > 0" class="parchment-panel asi-panel" style="margin-bottom:1rem;">
-						<h3 class="fantasy-heading" style="margin:0 0 0.3rem;">Magic Initiate: Choose a Cantrip ({{ magicInitiateChoice.pendingCantrips }} remaining)</h3>
+					<div v-if="magicInitiateChoice.pendingCantrips > 0" class="sheet-choice-panel">
+						<h3 class="fantasy-heading sheet-choice-title">Magic Initiate: Choose a Cantrip ({{ magicInitiateChoice.pendingCantrips }} remaining)</h3>
 						<div class="creation-grid">
 							<div v-for="opt in magicInitiateChoice.availableCantrips" :key="opt.name"
 								class="creation-card creation-card-compact"
@@ -116,8 +120,8 @@ const CharacterSheet = {
 						</div>
 					</div>
 
-					<div v-if="magicInitiateChoice.pendingSpell" class="parchment-panel asi-panel" style="margin-bottom:1rem;">
-						<h3 class="fantasy-heading" style="margin:0 0 0.3rem;">Magic Initiate: Choose a 1st-Level Spell</h3>
+					<div v-if="magicInitiateChoice.pendingSpell" class="sheet-choice-panel">
+						<h3 class="fantasy-heading sheet-choice-title">Magic Initiate: Choose a 1st-Level Spell</h3>
 						<div class="creation-grid">
 							<div v-for="opt in magicInitiateChoice.availableSpells" :key="opt.name"
 								class="creation-card creation-card-compact"
@@ -125,60 +129,6 @@ const CharacterSheet = {
 								@click="sheetAction('chooseMagicInitiateSpell',{spellName:opt.name})"
 							>{{ opt.name }}</div>
 						</div>
-					</div>
-
-					<!-- Ability scores -->
-					<div class="ability-grid">
-						<div v-for="abbr in ['str','dex','con','int','wis','cha']" :key="abbr" class="ability-box">
-							<span class="ability-label">{{ abbr.toUpperCase() }}</span>
-							<span class="ability-score">{{ character.abilityScores[abbr] }}</span>
-							<span class="ability-mod">{{ modLabel(character.modifiers[abbr]) }}</span>
-						</div>
-					</div>
-
-					<!-- Core stats -->
-					<div class="core-stats-row">
-						<div class="core-stat-box"><span class="core-stat-label">AC</span><span class="core-stat-value">{{ character.armorClass }}</span></div>
-						<div class="core-stat-box"><span class="core-stat-label">Max HP</span><span class="core-stat-value">{{ character.maxHitPoints }}</span></div>
-						<div class="core-stat-box"><span class="core-stat-label">Speed</span><span class="core-stat-value">{{ character.speed }} ft</span></div>
-						<div class="core-stat-box"><span class="core-stat-label">Proficiency</span><span class="core-stat-value">+{{ character.proficiencyBonus }}</span></div>
-						<div class="core-stat-box"><span class="core-stat-label">Gold</span><span class="core-stat-value">{{ character.gold }}</span></div>
-					</div>
-
-					<!-- Battle record -->
-					<div class="core-stats-row">
-						<div class="core-stat-box"><span class="core-stat-label">Monsters Fought</span><span class="core-stat-value">{{ character.monstersFought ?? 0 }}</span></div>
-						<div class="core-stat-box"><span class="core-stat-label">Monsters Slain</span><span class="core-stat-value">{{ character.monstersKilled ?? 0 }}</span></div>
-						<div class="core-stat-box"><span class="core-stat-label">Deaths</span><span class="core-stat-value">{{ character.deaths ?? 0 }}</span></div>
-					</div>
-
-					<!-- Traits/features -->
-					<div class="parchment-panel" style="margin-bottom:1rem;">
-						<p class="stat-subtitle" style="margin:0 0 0.5rem;"><strong>Saving Throws:</strong> {{ (character.savingThrowProficiencies||[]).join(', ') }}</p>
-						<template v-if="character.skillProficiencies && character.skillProficiencies.length">
-							<p class="stat-subtitle" style="margin:0 0 0.4rem;"><strong>Skill Proficiencies</strong></p>
-							<div class="sheet-features" style="margin-bottom:0.5rem;">
-								<span v-for="skill in character.skillProficiencies" :key="skill" class="feature-chip">{{ skill }}<template v-if="character.expertiseSkills && character.expertiseSkills.includes(skill)">*</template></span>
-							</div>
-						</template>
-						<template v-if="character.features && character.features.length">
-							<p class="stat-subtitle" style="margin:0.75rem 0 0.4rem;"><strong>Features</strong></p>
-							<div class="sheet-features">
-								<span v-for="f in character.features" :key="f.name" class="feature-chip">Lv {{ f.level }} — {{ f.name }}</span>
-							</div>
-						</template>
-						<template v-if="character.feats && character.feats.length">
-							<p class="stat-subtitle" style="margin:0.75rem 0 0.4rem;"><strong>Feats</strong></p>
-							<div class="sheet-features">
-								<span v-for="feat in character.feats" :key="feat" class="feature-chip">{{ feat }}</span>
-							</div>
-						</template>
-						<template v-if="character.speciesDetail && character.speciesDetail.traits && character.speciesDetail.traits.length">
-							<p class="stat-subtitle" style="margin:0.75rem 0 0.4rem;"><strong>Species Traits</strong></p>
-							<div class="sheet-features">
-								<span v-for="t in character.speciesDetail.traits" :key="t.name" class="feature-chip" :title="t.description">{{ t.name }}</span>
-							</div>
-						</template>
 					</div>
 
 					<!-- Tabs -->
@@ -193,24 +143,24 @@ const CharacterSheet = {
 					<div v-if="tab === 'weapons'" class="sheet-tab-panel">
 						<div v-if="inventory.length === 0" class="stat-subtitle">No weapons in inventory.</div>
 						<div v-for="item in inventory" :key="item.id" class="inventory-row">
-							<span class="inventory-name">{{ item.weaponName }}<template v-if="item.equipped"> <span class="feature-chip" style="font-size:0.7rem;padding:0.1rem 0.45rem;">equipped</span></template></span>
+							<span class="inventory-name">{{ item.weaponName }}<template v-if="item.equipped"> <span class="feature-chip feature-chip-sm">equipped</span></template></span>
 							<span class="inventory-stat">{{ item.damageDice }} {{ item.damageType }}</span>
 							<span class="inventory-stat">Atk {{ modLabel(item.attackBonus) }} / Dmg {{ modLabel(item.damageBonus) }}</span>
-							<span class="inventory-stat" style="display:flex;gap:0.3rem;">
-								<button type="button" :class="['btn', item.category === 'melee' ? 'btn-auto-battle' : '']" style="padding:0.15rem 0.5rem;font-size:0.75rem;" @click="inventoryMutate('setCategory',{inventoryId:item.id,category:'melee'})">Melee</button>
-								<button type="button" :class="['btn', item.category === 'ranged' ? 'btn-auto-battle' : '']" style="padding:0.15rem 0.5rem;font-size:0.75rem;" @click="inventoryMutate('setCategory',{inventoryId:item.id,category:'ranged'})">Ranged</button>
+							<span class="inventory-actions">
+								<button type="button" :class="['btn btn-xs', item.category === 'melee' ? 'btn-auto-battle' : '']" @click="inventoryMutate('setCategory',{inventoryId:item.id,category:'melee'})">Melee</button>
+								<button type="button" :class="['btn btn-xs', item.category === 'ranged' ? 'btn-auto-battle' : '']" @click="inventoryMutate('setCategory',{inventoryId:item.id,category:'ranged'})">Ranged</button>
 							</span>
-							<button type="button" class="btn" style="padding:0.15rem 0.5rem;font-size:0.75rem;" @click="inventoryMutate('equipWeapon',{inventoryId:item.id,equipped:!item.equipped})">{{ item.equipped ? 'Unequip' : 'Equip' }}</button>
-							<button type="button" class="btn" style="padding:0.15rem 0.5rem;font-size:0.75rem;border-color:var(--blood);color:var(--blood);" @click="inventoryMutate('removeWeapon',{inventoryId:item.id})">Remove</button>
+							<button type="button" class="btn btn-xs" @click="inventoryMutate('equipWeapon',{inventoryId:item.id,equipped:!item.equipped})">{{ item.equipped ? 'Unequip' : 'Equip' }}</button>
+							<button type="button" class="btn btn-xs btn-danger" @click="inventoryMutate('removeWeapon',{inventoryId:item.id})">Remove</button>
 						</div>
 						<div class="add-weapon-form">
 							<label class="stat-subtitle">Add weapon
-								<select v-model="addWeaponId" class="creation-input" style="margin:0.3rem 0 0;max-width:280px;">
+								<select v-model="addWeaponId" class="creation-input">
 									<option v-for="w in availableWeapons" :key="w.id" :value="w.id">{{ w.name }} ({{ w.damageDice }} {{ w.damageType }})</option>
 								</select>
 							</label>
 							<label class="stat-subtitle">Slot
-								<select v-model="addWeaponCategory" class="creation-input" style="margin:0.3rem 0 0;max-width:120px;">
+								<select v-model="addWeaponCategory" class="creation-input creation-input-sm">
 									<option value="melee">Melee</option>
 									<option value="ranged">Ranged</option>
 								</select>
@@ -223,14 +173,14 @@ const CharacterSheet = {
 					<div v-if="tab === 'armor'" class="sheet-tab-panel">
 						<div v-if="armorInventory.length === 0" class="stat-subtitle">No armor in inventory.</div>
 						<div v-for="item in armorInventory" :key="item.id" class="inventory-row">
-							<span class="inventory-name">{{ item.armorName }}<template v-if="item.equipped"> <span class="feature-chip" style="font-size:0.7rem;padding:0.1rem 0.45rem;">equipped</span></template></span>
+							<span class="inventory-name">{{ item.armorName }}<template v-if="item.equipped"> <span class="feature-chip feature-chip-sm">equipped</span></template></span>
 							<span class="inventory-stat">{{ capitalize(item.armorType) }} (AC {{ item.baseAc }})</span>
-							<button type="button" class="btn" style="padding:0.15rem 0.5rem;font-size:0.75rem;" @click="inventoryMutate('equipArmor',{inventoryId:item.id,equipped:!item.equipped})">{{ item.equipped ? 'Unequip' : 'Equip' }}</button>
-							<button type="button" class="btn" style="padding:0.15rem 0.5rem;font-size:0.75rem;border-color:var(--blood);color:var(--blood);" @click="inventoryMutate('removeArmor',{inventoryId:item.id})">Remove</button>
+							<button type="button" class="btn btn-xs" @click="inventoryMutate('equipArmor',{inventoryId:item.id,equipped:!item.equipped})">{{ item.equipped ? 'Unequip' : 'Equip' }}</button>
+							<button type="button" class="btn btn-xs btn-danger" @click="inventoryMutate('removeArmor',{inventoryId:item.id})">Remove</button>
 						</div>
 						<div class="add-weapon-form">
 							<label class="stat-subtitle">Add armor
-								<select v-model="addArmorId" class="creation-input" style="margin:0.3rem 0 0;max-width:280px;">
+								<select v-model="addArmorId" class="creation-input">
 									<option v-for="a in availableArmors" :key="a.id" :value="a.id">{{ a.name }} (AC {{ a.baseAc }})</option>
 								</select>
 							</label>
@@ -245,16 +195,16 @@ const CharacterSheet = {
 							<span class="inventory-name">{{ item.itemName }} &times;{{ item.quantity }}</span>
 							<span class="inventory-stat">{{ item.itemType }}</span>
 							<span class="inventory-stat">{{ item.description }}</span>
-							<button type="button" class="btn" style="padding:0.15rem 0.5rem;font-size:0.75rem;border-color:var(--blood);color:var(--blood);" @click="inventoryMutate('removeItem',{inventoryId:item.id})">Remove</button>
+							<button type="button" class="btn btn-xs btn-danger" @click="inventoryMutate('removeItem',{inventoryId:item.id})">Remove</button>
 						</div>
 						<div class="add-weapon-form">
 							<label class="stat-subtitle">Add item
-								<select v-model="addItemId" class="creation-input" style="margin:0.3rem 0 0;max-width:280px;">
+								<select v-model="addItemId" class="creation-input">
 									<option v-for="it in availableItems" :key="it.id" :value="it.id">{{ it.name }} ({{ it.itemType }})</option>
 								</select>
 							</label>
 							<label class="stat-subtitle">Qty
-								<input v-model.number="addItemQuantity" type="number" class="creation-input" min="1" style="margin:0.3rem 0 0;max-width:80px;">
+								<input v-model.number="addItemQuantity" type="number" class="creation-input creation-input-sm" min="1">
 							</label>
 							<button type="button" class="btn btn-attack" @click="addItem()">Add</button>
 						</div>
@@ -300,13 +250,75 @@ const CharacterSheet = {
 
 					<p v-if="message" class="sheet-message">{{ message }}</p>
 
-				</template>
-
-				<div class="turn-actions" style="margin-top:1.5rem;">
-					<router-link class="btn" to="/">Back to Character Select</router-link>
-					<router-link class="btn btn-auto-battle" to="/adventure">Adventure</router-link>
+					<div class="turn-actions" style="margin-top:1.5rem;">
+						<router-link class="btn" to="/">Back to Character Select</router-link>
+						<router-link class="btn btn-auto-battle" to="/adventure">Adventure</router-link>
+					</div>
 				</div>
-			</div>
+
+				<!-- Sidebar: at-a-glance stats -->
+				<div class="encounter-sidebar">
+					<div class="sheet-sidebar-section">
+						<h3 class="fantasy-heading sheet-sidebar-title">Ability Scores</h3>
+						<div class="ability-grid">
+							<div v-for="abbr in ['str','dex','con','int','wis','cha']" :key="abbr" class="ability-box">
+								<span class="ability-label">{{ abbr.toUpperCase() }}</span>
+								<span class="ability-score">{{ character.abilityScores[abbr] }}</span>
+								<span class="ability-mod">{{ modLabel(character.modifiers[abbr]) }}</span>
+							</div>
+						</div>
+					</div>
+
+					<div class="sheet-sidebar-section">
+						<h3 class="fantasy-heading sheet-sidebar-title">Core Stats</h3>
+						<div class="core-stats-row">
+							<div class="core-stat-box"><span class="core-stat-label">AC</span><span class="core-stat-value">{{ character.armorClass }}</span></div>
+							<div class="core-stat-box"><span class="core-stat-label">Max HP</span><span class="core-stat-value">{{ character.maxHitPoints }}</span></div>
+							<div class="core-stat-box"><span class="core-stat-label">Speed</span><span class="core-stat-value">{{ character.speed }} ft</span></div>
+							<div class="core-stat-box"><span class="core-stat-label">Prof.</span><span class="core-stat-value">+{{ character.proficiencyBonus }}</span></div>
+							<div class="core-stat-box"><span class="core-stat-label">Gold</span><span class="core-stat-value">{{ character.gold }}</span></div>
+						</div>
+					</div>
+
+					<div class="sheet-sidebar-section">
+						<h3 class="fantasy-heading sheet-sidebar-title">Battle Record</h3>
+						<div class="core-stats-row">
+							<div class="core-stat-box"><span class="core-stat-label">Fought</span><span class="core-stat-value">{{ character.monstersFought ?? 0 }}</span></div>
+							<div class="core-stat-box"><span class="core-stat-label">Slain</span><span class="core-stat-value">{{ character.monstersKilled ?? 0 }}</span></div>
+							<div class="core-stat-box"><span class="core-stat-label">Deaths</span><span class="core-stat-value">{{ character.deaths ?? 0 }}</span></div>
+						</div>
+					</div>
+
+					<div class="sheet-sidebar-section">
+						<h3 class="fantasy-heading sheet-sidebar-title">Traits &amp; Proficiencies</h3>
+						<p class="stat-subtitle sheet-sidebar-note"><strong>Saving Throws:</strong> {{ (character.savingThrowProficiencies||[]).join(', ') }}</p>
+						<template v-if="character.skillProficiencies && character.skillProficiencies.length">
+							<p class="stat-subtitle sheet-sidebar-note"><strong>Skills</strong></p>
+							<div class="sheet-features" style="margin-bottom:0.5rem;">
+								<span v-for="skill in character.skillProficiencies" :key="skill" class="feature-chip">{{ skill }}<template v-if="character.expertiseSkills && character.expertiseSkills.includes(skill)">*</template></span>
+							</div>
+						</template>
+						<template v-if="character.features && character.features.length">
+							<p class="stat-subtitle sheet-sidebar-note" style="margin-top:0.75rem;"><strong>Features</strong></p>
+							<div class="sheet-features">
+								<span v-for="f in character.features" :key="f.name" class="feature-chip">Lv {{ f.level }} — {{ f.name }}</span>
+							</div>
+						</template>
+						<template v-if="character.feats && character.feats.length">
+							<p class="stat-subtitle sheet-sidebar-note" style="margin-top:0.75rem;"><strong>Feats</strong></p>
+							<div class="sheet-features">
+								<span v-for="feat in character.feats" :key="feat" class="feature-chip">{{ feat }}</span>
+							</div>
+						</template>
+						<template v-if="character.speciesDetail && character.speciesDetail.traits && character.speciesDetail.traits.length">
+							<p class="stat-subtitle sheet-sidebar-note" style="margin-top:0.75rem;"><strong>Species Traits</strong></p>
+							<div class="sheet-features">
+								<span v-for="t in character.speciesDetail.traits" :key="t.name" class="feature-chip" :title="t.description">{{ t.name }}</span>
+							</div>
+						</template>
+					</div>
+				</div>
+			</template>
 		</div>
 	`,
 	setup() {
