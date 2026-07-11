@@ -47,25 +47,32 @@ class singleton {
 		"s": { "tile": "floor", "decoration": "sand" }
 	};
 
-	// Cache of fully-decoded static level geometry (tiles/decorations/
-	// spawns), keyed "moduleSlug|mapSlug" — see getModuleMap()'s doc
-	// comment. This service is a WireBox singleton, so the cache lives for
-	// the application's lifetime (cleared on ?fwreinit=1, same as any other
-	// in-memory singleton state), not just one request.
-	_gridGeometryCache = {};
+	// Caches below live in `application` scope (see _ensureCaches()), not as
+	// instance variables — this class is `new`'d fresh per request (there's
+	// no WireBox/DI container wiring it up as an actual long-lived
+	// singleton despite the class-level annotation), so an instance-scoped
+	// struct here would be created empty and thrown away every single
+	// request, never actually caching anything across requests. Keying and
+	// invalidation rules are documented at each cache's read site.
 
-	// Cache of a map's POI rows (loot/transition/spawn/encounter), keyed by
-	// mapId — see getModuleMap()'s doc comment on why this exists separately
-	// from _gridGeometryCache. Invalidated in deletePoiAt() (loot pickup)
-	// and saveEditorMap() (editor save), the only two places POI rows change.
-	_poiCache = {};
-
-	// Cache of parsed hard-coded ASCII levels, keyed by level name — the
-	// parse (and its _buildTileClassGrid() pass) is pure computation over
-	// static content, so there's no reason to redo it per request the way
-	// getLevel() originally did. Never invalidated: the levels only change
-	// with a code deploy, which restarts the runtime anyway.
-	_asciiLevelCache = {};
+	/**
+	 * Lazily initializes this service's three application-scoped caches
+	 * (map geometry, POI rows, parsed hard-coded ASCII levels) the first
+	 * time any request needs them. Called at the top of every function that
+	 * reads or writes one, matching the same lazy-init pattern combat.bxm
+	 * uses for `application.encounters`.
+	 */
+	private function _ensureCaches() {
+		if ( !structKeyExists( application, "mapGeometryCache" ) ) {
+			application.mapGeometryCache = {};
+		}
+		if ( !structKeyExists( application, "mapPoiCache" ) ) {
+			application.mapPoiCache = {};
+		}
+		if ( !structKeyExists( application, "asciiLevelCache" ) ) {
+			application.asciiLevelCache = {};
+		}
+	}
 
 	/**
 	 * Returns the named level, parsed and ready to use. Falls back to
@@ -75,18 +82,19 @@ class singleton {
 	 * @name The level's name (see LEVELS below).
 	 */
 	function getLevel( name ) {
+		_ensureCaches();
 		var levels = _levels();
 		var levelName = levels.keyExists( arguments.name ) ? arguments.name : "openField";
-		if ( !_asciiLevelCache.keyExists( levelName ) ) {
+		if ( !application.asciiLevelCache.keyExists( levelName ) ) {
 			var definition = levels[ levelName ];
-			_asciiLevelCache[ levelName ] = _parseAsciiLevel( definition.rows, definition.playerSpawn, definition.opponentSpawn );
+			application.asciiLevelCache[ levelName ] = _parseAsciiLevel( definition.rows, definition.playerSpawn, definition.opponentSpawn );
 		}
 		// Fresh wrapper struct per call, same as getModuleMap() — callers
 		// assign onto the returned struct (default.bx's _grid() sets .pois),
 		// which must never write through to the shared cache entry. The big
 		// inner arrays (tiles/decorations/tileClasses) are safely shared
 		// because nothing mutates them after parse.
-		var parsed = _asciiLevelCache[ levelName ];
+		var parsed = application.asciiLevelCache[ levelName ];
 		return {
 			"width": parsed.width,
 			"height": parsed.height,
@@ -329,6 +337,7 @@ class singleton {
 	 *  map as a non-entry (transition-only-reachable) one.
 	 */
 	function saveEditorMap( ownerUserId, moduleSlug, moduleName, moduleDescription, mapSlug, mapName, width, height, chunkSize, grid, playerSpawn, opponentSpawn, transitions = [], spawnPoints = [], isEntry = false ) {
+		_ensureCaches();
 		var moduleId = _upsertModule( arguments.moduleSlug, arguments.moduleName, arguments.moduleDescription, arguments.ownerUserId );
 		var mapId = _upsertMap(
 			moduleId, arguments.mapSlug, arguments.mapName, arguments.width, arguments.height,
@@ -372,8 +381,8 @@ class singleton {
 		// below are about to change too, so drop _loadPois()'s cache for
 		// this map as well (deletePoiAt() invalidates it for loot pickups;
 		// this is the editor-save counterpart).
-		_gridGeometryCache.delete( arguments.moduleSlug & "|" & arguments.mapSlug );
-		_poiCache.delete( mapId );
+		application.mapGeometryCache.delete( arguments.moduleSlug & "|" & arguments.mapSlug );
+		application.mapPoiCache.delete( mapId );
 
 		queryExecute(
 			"DELETE FROM adventure_map_pois WHERE map_id = :mapId AND poi_type = 'transition'",
@@ -651,19 +660,21 @@ class singleton {
 	 * single map entry/transition). Safe to share the same tiles/decorations
 	 * arrays across callers because nothing mutates them after _blitChunk()
 	 * builds them here; `pois` is cached separately (see _loadPois()'s
-	 * _poiCache), invalidated in deletePoiAt() (a loot POI is deleted once
-	 * collected) and saveEditorMap(), rather than sharing _gridGeometryCache's
-	 * lifetime directly — POIs and tile geometry change independently. The
+	 * application.mapPoiCache), invalidated in deletePoiAt() (a loot POI is
+	 * deleted once collected) and saveEditorMap(), rather than sharing
+	 * application.mapGeometryCache's lifetime directly — POIs and tile
+	 * geometry change independently. The
 	 * geometry cache itself is invalidated per-map by saveEditorMap() so
 	 * re-saving a map from the editor doesn't leave players seeing a stale
 	 * decode.
 	 */
 	function getModuleMap( moduleSlug, mapSlug ) {
+		_ensureCaches();
 		var cacheKey = arguments.moduleSlug & "|" & arguments.mapSlug;
-		if ( !_gridGeometryCache.keyExists( cacheKey ) ) {
-			_gridGeometryCache[ cacheKey ] = _decodeMapGeometry( arguments.moduleSlug, arguments.mapSlug );
+		if ( !application.mapGeometryCache.keyExists( cacheKey ) ) {
+			application.mapGeometryCache[ cacheKey ] = _decodeMapGeometry( arguments.moduleSlug, arguments.mapSlug );
 		}
-		var geometry = _gridGeometryCache[ cacheKey ];
+		var geometry = application.mapGeometryCache[ cacheKey ];
 
 		return {
 			"width": geometry.width,
@@ -721,13 +732,14 @@ class singleton {
 	 * again on a future visit to the map.
 	 */
 	function deletePoiAt( moduleSlug, mapSlug, x, y ) {
+		_ensureCaches();
 		var mapRow = _getMapRow( arguments.moduleSlug, arguments.mapSlug );
 		queryExecute(
 			"DELETE FROM adventure_map_pois WHERE map_id = :mapId AND x = :x AND y = :y",
 			{ "mapId": mapRow.id[ 1 ], "x": arguments.x, "y": arguments.y },
 			{ datasource: "gameserver" }
 		);
-		_poiCache.delete( mapRow.id[ 1 ] );
+		application.mapPoiCache.delete( mapRow.id[ 1 ] );
 	}
 
 	/**
@@ -735,16 +747,18 @@ class singleton {
 	 * to a map, with `payload` already JSON-deserialized into a struct —
 	 * e.g. default.bx's map-transition check reads
 	 * `poi.payload.targetModule`/`poi.payload.targetMap` directly rather
-	 * than re-parsing JSON on every move. Cached per mapId (see _poiCache)
-	 * since getModuleMap() calls this on every request for the lifetime of
-	 * an encounter — without caching, a map with a large POI count (e.g.
+	 * than re-parsing JSON on every move. Cached per mapId (see
+	 * application.mapPoiCache) since getModuleMap() calls this on every
+	 * request for the lifetime of an encounter — without caching, a map
+	 * with a large POI count (e.g.
 	 * many opponent spawn points) re-queries and re-deserializes all of
 	 * them on every single move/attack/auto-battle tick, even though only
 	 * loot/transition types are ever re-read after map entry.
 	 */
 	private function _loadPois( mapId ) {
-		if ( _poiCache.keyExists( arguments.mapId ) ) {
-			return _poiCache[ arguments.mapId ];
+		_ensureCaches();
+		if ( application.mapPoiCache.keyExists( arguments.mapId ) ) {
+			return application.mapPoiCache[ arguments.mapId ];
 		}
 		var rows = queryExecute(
 			"SELECT x, y, poi_type, payload FROM adventure_map_pois WHERE map_id = :mapId",
@@ -760,7 +774,7 @@ class singleton {
 				"payload": len( rows.payload[ i ] ) ? JSONDeserialize( rows.payload[ i ] ) : {}
 			} );
 		}
-		_poiCache[ arguments.mapId ] = pois;
+		application.mapPoiCache[ arguments.mapId ] = pois;
 		return pois;
 	}
 
