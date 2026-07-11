@@ -6207,9 +6207,21 @@ class singleton {
 		player.hasGrapplerFeat = arrayFindNoCase( player.feats, "Grappler" ) > 0;
 		// Magic Initiate: a simple attack cantrip usable in place of a weapon attack.
 		player.hasMagicInitiate = arrayFindNoCase( player.feats, "Magic Initiate" ) > 0;
-		// Defense fighting style: +1 Armor Class.
+		// Defense fighting style: +1 Armor Class, but only while wearing
+		// Light, Medium, or Heavy body armor — not unarmored, and not from
+		// a shield alone (see _recalculateArmorClass()'s own armor_type
+		// != 'shield' distinction for the same body-armor-vs-shield split).
 		if ( arrayFindNoCase( player.feats, "Defense" ) > 0 ) {
-			player.armorClass += 1;
+			var wornBodyArmor = queryExecute(
+				"SELECT 1 AS found FROM character_armor ca
+				 JOIN armors a ON a.id = ca.armor_id
+				 WHERE ca.character_id = :characterId AND ca.equipped = 1 AND a.armor_type != 'shield'",
+				{ "characterId": arguments.characterId },
+				{ datasource: "gameserver" }
+			);
+			if ( wornBodyArmor.recordCount > 0 ) {
+				player.armorClass += 1;
+			}
 		}
 
 		// Rage (Barbarian 1): derives ragesRemaining from the persisted
