@@ -747,14 +747,13 @@ const CombatEncounter = {
 			return `Day ${ day }, ${ hh }:${ mm }`;
 		} );
 
+		// Only feats with actual coded mechanics (see CombatService.bx's
+		// grantChosenFeat()) — every other SRD 5.2.1 feat name would be
+		// picked but silently do nothing, and most feat names from the full
+		// PHB (Tough, Lucky, Polearm Master, etc.) aren't licensed content
+		// this project can implement at all.
 		const availableLevelUpFeats = computed( () => {
-			return ["Alert","Athlete","Actor","Charger","Crossbow Expert","Defensive Duelist","Dual Wielder","Dungeon Delver",
-				"Durable","Elemental Adept","Grappler","Great Weapon Master","Healer","Heavily Armored","Heavy Armor Master",
-				"Inspiring Leader","Keen Mind","Lightly Armored","Linguist","Lucky","Mage Slayer","Magic Initiate",
-				"Martial Adept","Medium Armor Master","Mobile","Moderately Armored","Mounted Combatant","Observant",
-				"Polearm Master","Resilient","Ritual Caster","Savage Attacker","Sentinel","Sharpshooter","Shield Master",
-				"Skilled","Skulker","Spell Sniper","Tavern Brawler","Tough","War Caster","Weapon Master"
-			];
+			return ["Alert","Grappler","Magic Initiate","Savage Attacker","Skilled"];
 		} );
 
 		function playerHasFeature( name ) {
