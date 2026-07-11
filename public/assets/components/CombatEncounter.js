@@ -1,5 +1,14 @@
 const VIEWPORT_RADIUS = 12;
 
+// Stable per-slot color identity for telling party members apart on the
+// battle grid and in the sidebar — keyed by position in state.players, not
+// by whether a member is currently active, so a character's color never
+// changes as you switch who's active.
+const PARTY_COLOR_COUNT = 4;
+function partyColorClass( idx ) {
+	return "party-color-" + ( ( ( idx - 1 ) % PARTY_COLOR_COUNT ) + 1 );
+}
+
 const CombatEncounter = {
 	template: `
 		<div class="encounter">
@@ -204,7 +213,7 @@ const CombatEncounter = {
 				<div class="combatants">
 					<template v-for="(member, memberIdx) in partyMembers" :key="member.characterId || memberIdx">
 						<div
-							:class="['stat-card','stat-card-player', member.hitPoints <= 0 ? 'stat-card-down' : '', (memberIdx+1) === cs.activePlayerIndex ? 'stat-card-active' : '']"
+							:class="['stat-card','stat-card-player', partyMembers.length > 1 ? partyColorClass(memberIdx+1) : '', member.hitPoints <= 0 ? 'stat-card-down' : '', (memberIdx+1) === cs.activePlayerIndex ? 'stat-card-active' : '']"
 							:title="partyMembers.length > 1 ? 'Make ' + member.name + ' the active character' : ''"
 							@click="selectActiveCharacter(memberIdx+1)"
 						>
@@ -528,6 +537,29 @@ const CombatEncounter = {
 			return ( cs.player && cs.player.name ) ? [ cs.player ] : [];
 		} );
 
+		// One short label per party member for the battle-grid tokens —
+		// each member's first initial, extended a letter at a time for
+		// anyone still colliding with another living party member (e.g.
+		// Dev/Declan share "D", and even "De" — this only resolves at
+		// "Dev" vs "Dec") so the color isn't the only thing telling two
+		// tokens apart. Capped at 3 letters so a token never gets too
+		// crowded to read even if it stays ambiguous (e.g. two characters
+		// with the exact same name).
+		const partyLabels = computed( () => {
+			const names = partyMembers.value.map( ( m ) => m.name || "?" );
+			const labels = names.map( ( n ) => n.charAt( 0 ).toUpperCase() );
+			for ( let len = 2; len <= 3; len++ ) {
+				const counts = {};
+				labels.forEach( ( l ) => { counts[ l ] = ( counts[ l ] || 0 ) + 1; } );
+				for ( let i = 0; i < labels.length; i++ ) {
+					if ( counts[ labels[ i ] ] > 1 ) {
+						labels[ i ] = names[ i ].slice( 0, len );
+					}
+				}
+			}
+			return labels;
+		} );
+
 		// Who a heal spell targets — 1-based index into partyMembers, or null
 		// for "the caster themself" (the server's own default when no target
 		// is sent). Purely a UI selection; the server re-validates it exists.
@@ -551,23 +583,6 @@ const CombatEncounter = {
 				extra.targetPlayerIndex = healTargetIndex.value;
 			}
 			ws( "cast_spell", extra );
-		}
-
-		// Non-active party members' tiles, keyed like foeByTile — the active
-		// member's own tile is handled separately (tile-player/⚔) since it's
-		// also the movement/camera anchor.
-		const allyByTile = computed( () => {
-			const m = Object.create( null );
-			partyMembers.value.forEach( ( p, i ) => {
-				if ( ( i + 1 ) !== cs.activePlayerIndex && p.hitPoints > 0 && p.position ) {
-					m[ p.position.x + "," + p.position.y ] = p;
-				}
-			} );
-			return m;
-		} );
-
-		function allyAt( x, y ) {
-			return allyByTile.value[ x + "," + y ] ?? null;
 		}
 
 		function partyIndexAt( x, y ) {
@@ -615,8 +630,11 @@ const CombatEncounter = {
 		function tileClass( x, y ) {
 			const base = baseTileClass( x, y );
 
-			if ( cs.player && cs.player.position && cs.player.position.x === x && cs.player.position.y === y ) return base + " tile-player";
-			if ( allyAt( x, y ) ) return base + " tile-ally";
+			const partyIdx = partyIndexAt( x, y );
+			if ( partyIdx ) {
+				const isActive = partyIdx === cs.activePlayerIndex;
+				return base + " tile-party " + partyColorClass( partyIdx ) + ( isActive ? " tile-party-active" : "" );
+			}
 			const foe = opponentAt( x, y );
 			if ( foe ) {
 				const isTarget = foe.mobIndex === cs.selectedOpponentIndex;
@@ -630,9 +648,11 @@ const CombatEncounter = {
 		}
 
 		function tileTitle( x, y ) {
-			if ( cs.player && cs.player.position && cs.player.position.x === x && cs.player.position.y === y ) return cs.player.name;
-			const ally = allyAt( x, y );
-			if ( ally ) return ally.name + " (click to make active)";
+			const partyIdx = partyIndexAt( x, y );
+			if ( partyIdx ) {
+				const member = partyMembers.value[ partyIdx - 1 ];
+				return partyIdx === cs.activePlayerIndex ? member.name : member.name + " (click to make active)";
+			}
 			const foe = opponentAt( x, y );
 			if ( foe ) return foe.name;
 			const poi = poiTypeAt( x, y );
@@ -642,8 +662,8 @@ const CombatEncounter = {
 		}
 
 		function tileEmoji( x, y ) {
-			if ( cs.player && cs.player.position && cs.player.position.x === x && cs.player.position.y === y ) return "⚔";
-			if ( allyAt( x, y ) ) return "🛡";
+			const partyIdx = partyIndexAt( x, y );
+			if ( partyIdx ) return partyLabels.value[ partyIdx - 1 ];
 			const foe = opponentAt( x, y );
 			if ( foe ) return "☠";
 			const poi = poiTypeAt( x, y );
@@ -787,7 +807,7 @@ const CombatEncounter = {
 			canRest, maxRestDice, hoursUntilNextLongRest, gameClockLabel,
 			tileClass, tileTitle, tileEmoji, tileClick, selectActiveCharacter,
 			playerHasFeature, hasSpellResource, itemIsUsable, describeSpell,
-			healTargetIndex, isHealTarget, healTargetName, castLeveledSpell,
+			healTargetIndex, isHealTarget, healTargetName, castLeveledSpell, partyColorClass,
 			ws, startAutoBattle, stopAutoBattle, confirmAsi, confirmFeat, toggleAsiSkill
 		};
 	}

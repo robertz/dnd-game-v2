@@ -799,20 +799,34 @@ main.scroll {
 	50% { opacity: 0.75; }
 }
 
-.tile-player {
-	background-image: radial-gradient( circle, rgba(58, 107, 58, 0.85), rgba(30, 58, 30, 0.85) );
+/* Party member tiles/cards: one stable color + initial per party slot (see
+   partyColorClass() in CombatEncounter.js), so up to 4 characters stay
+   visually distinct from each other regardless of which one is active. */
+.tile-party {
 	box-shadow: inset 0 0 6px rgba(0, 0, 0, 0.6);
+	color: var(--parchment);
+	font-weight: 700;
+	font-size: clamp(7px, 1.5vw, 13px);
+	letter-spacing: -0.02em;
 }
+
+.tile-party.party-color-1 { background-image: radial-gradient( circle, rgba(58, 120, 181, 0.85), rgba(22, 46, 78, 0.85) ); }
+.tile-party.party-color-2 { background-image: radial-gradient( circle, rgba(58, 158, 90, 0.85), rgba(20, 62, 36, 0.85) ); }
+.tile-party.party-color-3 { background-image: radial-gradient( circle, rgba(181, 122, 48, 0.85), rgba(78, 50, 16, 0.85) ); }
+.tile-party.party-color-4 { background-image: radial-gradient( circle, rgba(158, 90, 181, 0.85), rgba(62, 30, 78, 0.85) ); }
+
+.tile-party-active {
+	box-shadow: inset 0 0 0 2px var(--gold), inset 0 0 6px rgba(0, 0, 0, 0.6), 0 0 8px 1px var(--gold);
+}
+
+.stat-card-player.party-color-1 { border-left: 4px solid rgba(90, 150, 210, 0.9); }
+.stat-card-player.party-color-2 { border-left: 4px solid rgba(90, 190, 120, 0.9); }
+.stat-card-player.party-color-3 { border-left: 4px solid rgba(210, 150, 80, 0.9); }
+.stat-card-player.party-color-4 { border-left: 4px solid rgba(190, 120, 210, 0.9); }
 
 .tile-opponent {
 	background-image: radial-gradient( circle, rgba(110, 20, 20, 0.85), rgba(42, 10, 10, 0.85) );
 	box-shadow: inset 0 0 6px rgba(0, 0, 0, 0.6);
-}
-
-.tile-ally {
-	background-image: radial-gradient( circle, rgba(58, 90, 110, 0.85), rgba(20, 40, 58, 0.85) );
-	box-shadow: inset 0 0 6px rgba(0, 0, 0, 0.6);
-	cursor: pointer;
 }
 
 .tile-transition {
