@@ -299,43 +299,107 @@ class singleton {
 	}
 
 	/**
-	 * Resets everything that recharges at the top of a new round: the
-	 * player's movement and Action/Bonus Action/Reaction economy, and every
-	 * living combatant's Reaction (used for opportunity attacks — see
-	 * checkOpportunityAttacks()). Shared by endPlayerTurn() and the wire
+	 * Switches which party member `state.player` is aliased to — saves the
+	 * outgoing member's per-turn economy (movement/action/bonus action/
+	 * attacks) onto their own struct in `state.players`, then restores the
+	 * incoming member's saved economy onto the top-level scratch fields every
+	 * existing combat function already reads via `state.movementRemaining`
+	 * etc. A no-op if `newIndex` is out of range or already active.
+	 *
+	 * @state The encounter's full mutable game state struct.
+	 * @newIndex 1-based index into `state.players` to make active.
+	 */
+	function switchActivePlayer( state, newIndex ) {
+		if ( arguments.newIndex < 1 || arguments.newIndex > arguments.state.players.len() || arguments.newIndex == arguments.state.activePlayerIndex ) {
+			return;
+		}
+		var outgoing = arguments.state.players[ arguments.state.activePlayerIndex ];
+		outgoing.movementRemaining   = arguments.state.movementRemaining;
+		outgoing.actionUsed          = arguments.state.actionUsed;
+		outgoing.bonusActionUsed     = arguments.state.bonusActionUsed;
+		outgoing.attacksUsedThisTurn = arguments.state.attacksUsedThisTurn;
+
+		arguments.state.activePlayerIndex = arguments.newIndex;
+		var incoming = arguments.state.players[ arguments.newIndex ];
+		arguments.state.player = incoming;
+		arguments.state.movementRemaining   = structKeyExists( incoming, "movementRemaining" )   ? incoming.movementRemaining   : max( 0, int( incoming.speed / 5 ) );
+		arguments.state.actionUsed          = structKeyExists( incoming, "actionUsed" )          ? incoming.actionUsed          : false;
+		arguments.state.bonusActionUsed     = structKeyExists( incoming, "bonusActionUsed" )     ? incoming.bonusActionUsed     : false;
+		arguments.state.attacksUsedThisTurn = structKeyExists( incoming, "attacksUsedThisTurn" ) ? incoming.attacksUsedThisTurn : 0;
+	}
+
+	/**
+	 * Whether every living party member has spent their action economy this
+	 * round — used in place of a single-player exhaustion check to decide
+	 * when the party's turn can auto-end. For a solo party this reduces to
+	 * exactly the same check as before multi-character support existed.
+	 *
+	 * @state The encounter's full mutable game state struct.
+	 */
+	function allPlayersExhausted( state ) {
+		for ( var i = 1; i <= arguments.state.players.len(); i++ ) {
+			var member = arguments.state.players[ i ];
+			if ( member.hitPoints <= 0 ) {
+				continue;
+			}
+			var isActive = ( i == arguments.state.activePlayerIndex );
+			var actionUsed          = isActive ? arguments.state.actionUsed          : ( structKeyExists( member, "actionUsed" )          ? member.actionUsed          : false );
+			var attacksUsedThisTurn = isActive ? arguments.state.attacksUsedThisTurn : ( structKeyExists( member, "attacksUsedThisTurn" ) ? member.attacksUsedThisTurn : 0 );
+			if ( !actionUsed || attacksUsedThisTurn < attacksPerTurn( member ) ) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/**
+	 * Resets everything that recharges at the top of a new round for every
+	 * living party member: movement and Action/Bonus Action/Reaction economy,
+	 * plus every living combatant's Reaction (used for opportunity attacks —
+	 * see checkOpportunityAttacks()). Shared by endPlayerTurn() and the wire
 	 * component's auto-battle loop so the reset logic only lives in one place.
 	 *
 	 * @state The encounter's full mutable game state struct.
 	 */
 	function startNewRound( state ) {
-		// The in-game clock ticks forward by one round (~6 seconds, per the
-		// SRD) — this is what Short/Long Rest's hour-sized jumps are
-		// measured against (see SECONDS_PER_ROUND/shortRest()/longRest()).
-		if ( structKeyExists( arguments.state.player, "gameClockSeconds" ) ) {
-			arguments.state.player.gameClockSeconds += SECONDS_PER_ROUND;
+		for ( var member in arguments.state.players ) {
+			// The in-game clock ticks forward by one round (~6 seconds, per the
+			// SRD) — this is what Short/Long Rest's hour-sized jumps are
+			// measured against (see SECONDS_PER_ROUND/shortRest()/longRest()).
+			if ( structKeyExists( member, "gameClockSeconds" ) ) {
+				member.gameClockSeconds += SECONDS_PER_ROUND;
+			}
+			// Weapon Mastery — Slow: a hit reduces the target's Speed by 10 ft.
+			// until the start of the attacker's next turn — approximated here as
+			// "until the start of the next round," since this app has exactly one
+			// party turn per round. Reset (not reapplied) every round.
+			member.speedPenalty = 0;
+			member.reactionUsed = false;
+			// Sneak Attack (Rogue) and Weapon Mastery — Vex are each limited to
+			// "once per turn"/"until your next attack lands"; both reset here so a
+			// leftover flag from last round can't linger indefinitely if unused.
+			member.usedSneakAttackThisTurn = false;
+			member.vexAdvantageTarget = "";
+			member.usedNickThisTurn = false;
+			member.movementRemaining   = max( 0, int( member.speed / 5 ) );
+			member.actionUsed          = false;
+			member.bonusActionUsed     = false;
+			member.attacksUsedThisTurn = 0;
 		}
-		// Weapon Mastery — Slow: a hit reduces the target's Speed by 10 ft.
-		// until the start of the attacker's next turn — approximated here as
-		// "until the start of the next round," since this app has exactly one
-		// player turn per round. Reset (not reapplied) every round.
-		arguments.state.player.speedPenalty = 0;
-		arguments.state.movementRemaining = max( 0, int( arguments.state.player.speed / 5 ) );
-		arguments.state.actionUsed = false;
-		arguments.state.bonusActionUsed = false;
-		arguments.state.attacksUsedThisTurn = 0;
+		// state.player is a live alias into state.players, so its fields were
+		// just reset by the loop above — refresh the top-level scratch copy
+		// every other combat function reads via state.movementRemaining etc.
+		var active = arguments.state.players[ arguments.state.activePlayerIndex ];
+		arguments.state.movementRemaining   = active.movementRemaining;
+		arguments.state.actionUsed          = active.actionUsed;
+		arguments.state.bonusActionUsed     = active.bonusActionUsed;
+		arguments.state.attacksUsedThisTurn = active.attacksUsedThisTurn;
 		// Whether either side actually attacked/cast this round — see
 		// autoStep()'s stalemate check, which stops auto-battle rather than
 		// polling forever when neither combatant can reach the other (e.g. a
 		// monster stranded in water, or a maze pocket the player can't path
 		// out of).
 		arguments.state.roundHadAction = false;
-		arguments.state.player.reactionUsed = false;
-		// Sneak Attack (Rogue) and Weapon Mastery — Vex are each limited to
-		// "once per turn"/"until your next attack lands"; both reset here so a
-		// leftover flag from last round can't linger indefinitely if unused.
-		arguments.state.player.usedSneakAttackThisTurn = false;
-		arguments.state.player.vexAdvantageTarget = "";
-		arguments.state.player.usedNickThisTurn = false;
 		for ( var opponent in _stateOpponents( arguments.state ) ) {
 			opponent.reactionUsed = false;
 			opponent.speedPenalty = 0;
@@ -384,7 +448,7 @@ class singleton {
 	 * @startPosition Where `mover` was standing before this move ({x, y}).
 	 */
 	function checkOpportunityAttacks( state, mover, moverIsPlayer, startPosition ) {
-		var hostiles = arguments.moverIsPlayer ? _stateOpponents( arguments.state ) : [ arguments.state.player ];
+		var hostiles = arguments.moverIsPlayer ? _stateOpponents( arguments.state ) : arguments.state.players;
 		var moverAtStart = { "position": arguments.startPosition };
 
 		for ( var hostile in hostiles ) {
@@ -412,42 +476,156 @@ class singleton {
 	}
 
 	/**
+	 * Aggro/threat tracking: records that `attacker` (a party member) dealt
+	 * `amount` damage to `defender` (an opponent), so _selectAggroTarget()
+	 * can have opponents fixate on whichever party member has hurt them
+	 * most. Identified by shape rather than an explicit flag: a party
+	 * member struct always carries `characterId`, an opponent struct always
+	 * carries `mobIndex` — so this is a no-op for every other
+	 * attacker/defender pairing (a monster damaging the party, healing,
+	 * Cleave's damage back onto the same monster's own ally never happens,
+	 * etc.), and every damage call site can call it unconditionally.
+	 *
+	 * @defender The opponent that was just damaged (mutated in place).
+	 * @attacker Whoever dealt the damage.
+	 * @amount The actual damage dealt, after resistance/vulnerability.
+	 */
+	private function _recordThreat( defender, attacker, amount ) {
+		if (
+			arguments.amount <= 0 ||
+			!structKeyExists( arguments.attacker, "characterId" ) ||
+			!structKeyExists( arguments.defender, "mobIndex" )
+		) {
+			return;
+		}
+		if ( !structKeyExists( arguments.defender, "threat" ) ) {
+			arguments.defender.threat = {};
+		}
+		var key = "p#arguments.attacker.characterId#";
+		arguments.defender.threat[ key ] = ( structKeyExists( arguments.defender.threat, key ) ? arguments.defender.threat[ key ] : 0 ) + arguments.amount;
+	}
+
+	/**
+	 * Picks which living party member `opponent` should pursue/attack this
+	 * turn: among whichever members it currently perceives (line of sight,
+	 * or unconditionally if the encounter has no grid — same "aware from
+	 * the start" fallback the pre-aggro version of this AI used), whichever
+	 * has dealt it the most cumulative damage so far (see _recordThreat()),
+	 * ties broken by proximity. If nothing is currently visible but the
+	 * opponent was already aware of the party, it keeps pursuing its
+	 * highest-threat *known* target rather than forgetting the party the
+	 * instant sight breaks — same "stays alerted" simplification the
+	 * pre-aggro version used, just generalized from "the player" to "the
+	 * party." Returns null (opponent does nothing this turn) if it has
+	 * never perceived anyone.
+	 *
+	 * @state The encounter's full mutable game state struct.
+	 * @opponent The opponent choosing a target.
+	 */
+	private function _selectAggroTarget( state, opponent ) {
+		var grid = _stateGrid( arguments.state );
+		if ( !structKeyExists( arguments.opponent, "aware" ) ) {
+			arguments.opponent.aware = false;
+		}
+
+		var living = [];
+		for ( var member in arguments.state.players ) {
+			if ( member.hitPoints > 0 ) {
+				living.append( member );
+			}
+		}
+		if ( living.len() == 0 ) {
+			return javaCast( "null", 0 );
+		}
+
+		var visible = [];
+		for ( var member in living ) {
+			if ( isNull( grid ) || hasLineOfSight( grid, arguments.opponent.position, member.position ) ) {
+				visible.append( member );
+			}
+		}
+
+		var target = javaCast( "null", 0 );
+		if ( visible.len() > 0 ) {
+			if ( !arguments.opponent.aware ) {
+				arguments.opponent.aware = true;
+				arguments.state.log.prepend( "#arguments.opponent.name# notices you!" );
+			}
+			target = _highestThreatTarget( arguments.opponent, visible );
+		} else if ( arguments.opponent.aware ) {
+			target = _highestThreatTarget( arguments.opponent, living );
+		}
+
+		// Stashed only for opponentsForClient()'s "who is this thing focused
+		// on" indicator — purely cosmetic, no combat logic reads it back.
+		arguments.opponent.aggroTarget = isNull( target ) ? "" : target.name;
+		return target;
+	}
+
+	/**
+	 * Among `candidates` (living party members), the one that's dealt
+	 * `opponent` the most cumulative damage — ties broken by proximity,
+	 * then by array order (favors whichever member appears first in
+	 * `state.players`), so behavior stays deterministic when no damage has
+	 * been dealt yet (e.g. the opponent's very first turn after noticing
+	 * the party).
+	 */
+	private function _highestThreatTarget( opponent, candidates ) {
+		var threat = structKeyExists( arguments.opponent, "threat" ) ? arguments.opponent.threat : {};
+		var best = javaCast( "null", 0 );
+		var bestThreat = -1;
+		var bestDistance = 999999;
+		for ( var member in arguments.candidates ) {
+			var key = "p#member.characterId#";
+			var memberThreat = structKeyExists( threat, key ) ? threat[ key ] : 0;
+			var distance = chebyshev( arguments.opponent, member );
+			if ( memberThreat > bestThreat || ( memberThreat == bestThreat && distance < bestDistance ) ) {
+				best = member;
+				bestThreat = memberThreat;
+				bestDistance = distance;
+			}
+		}
+		return best;
+	}
+
+	/**
 	 * Runs every living opponent's turn in sequence (via _runOneOpponentTurn()),
-	 * stopping early if the player goes down mid-sequence. For a single-mob
-	 * state (no `state.opponents` array), this runs exactly the one opponent's
-	 * turn, same as before multi-mob support existed.
+	 * stopping early if its target goes down mid-sequence. Each opponent
+	 * picks its own target via _selectAggroTarget() (perception, then
+	 * threat) — distance fields for movement are built once per distinct
+	 * target position and reused across every opponent pursuing that same
+	 * target, rather than once per opponent, since in practice most/all
+	 * opponents converge on whichever party member is currently drawing
+	 * the most aggro.
 	 *
 	 * @state The encounter's full mutable game state struct.
 	 */
 	function runEnemyTurn( state ) {
-		// One BFS flood from the player shared by every mob's movement this
-		// turn — with a whole map's worth of mobs converging, per-mob
-		// pathfinding (a full-map BFS each) took tens of seconds per round.
-		// Skipped entirely while no living mob could possibly move this turn
-		// (none alerted, none close enough to become alerted — Chebyshev
-		// within MAX_SIGHT_SQUARES is a prerequisite for line of sight), so
-		// exploring an empty stretch of map doesn't pay for the flood.
+		// Per-mob pathfinding (a full-map BFS each) took tens of seconds a
+		// round with a whole map's worth of mobs converging, so distance
+		// fields are built once per distinct target position and shared by
+		// every opponent pursuing that same target this turn, rather than
+		// once per opponent.
 		var grid = _stateGrid( arguments.state );
-		var distanceField = javaCast( "null", 0 );
-		if ( !isNull( grid ) ) {
-			for ( var opponent in _stateOpponents( arguments.state ) ) {
-				if ( opponent.hitPoints <= 0 ) {
-					continue;
-				}
-				if (
-					( structKeyExists( opponent, "aware" ) && opponent.aware ) ||
-					chebyshev( opponent, arguments.state.player ) <= MAX_SIGHT_SQUARES
-				) {
-					distanceField = _distanceField( grid, arguments.state.player.position );
-					break;
-				}
-			}
-		}
+		var fieldsByTarget = {};
+
 		for ( var opponent in _stateOpponents( arguments.state ) ) {
 			if ( opponent.hitPoints <= 0 ) {
 				continue;
 			}
-			_runOneOpponentTurn( arguments.state, opponent, distanceField );
+			var target = _selectAggroTarget( arguments.state, opponent );
+			if ( isNull( target ) ) {
+				continue;
+			}
+			var distanceField = javaCast( "null", 0 );
+			if ( !isNull( grid ) ) {
+				var fieldKey = "#target.position.x#,#target.position.y#";
+				if ( !structKeyExists( fieldsByTarget, fieldKey ) ) {
+					fieldsByTarget[ fieldKey ] = _distanceField( grid, target.position );
+				}
+				distanceField = fieldsByTarget[ fieldKey ];
+			}
+			_runOneOpponentTurn( arguments.state, opponent, target, distanceField );
 			if ( arguments.state.gameOver ) {
 				return;
 			}
@@ -468,36 +646,23 @@ class singleton {
 	 * ranged weapon if in range.
 	 *
 	 * Does nothing at all — no movement, no regeneration, no combat checks —
-	 * until the opponent has actually perceived the player (a clear line of
-	 * sight within the 60-ft sight cap, via hasLineOfSight()), tracked on
-	 * `opponent.aware`. Once alerted it stays alerted and pursues every round,
-	 * even after losing sight — so a mob chases the player around a corner
-	 * rather than forgetting them the moment the wall intervenes. Without a
-	 * grid (state has no walls to hide behind — e.g. the unit tests), every
-	 * opponent is aware from the start. Movement/reach log lines are only
-	 * written while the mob is within sight, so a map's worth of alerted mobs
+	 * for an opponent that's never perceived anyone (see
+	 * _selectAggroTarget() — runEnemyTurn() skips calling this function
+	 * entirely in that case). Movement/reach log lines are only written
+	 * while `target` is within sight, so a map's worth of alerted mobs
 	 * converging from far away doesn't flood the log every round.
 	 *
 	 * @state The encounter's full mutable game state struct.
 	 * @opponent The specific opponent whose turn this is.
-	 * @distanceField Optional shared player-distance field (see
-	 *  _distanceField()), built once per enemy turn by runEnemyTurn() —
-	 *  movement follows it downhill instead of running a per-mob BFS.
+	 * @target The party member this opponent picked via _selectAggroTarget().
+	 * @distanceField Optional shared distance field toward `target`'s
+	 *  position (see _distanceField()), built once per enemy turn by
+	 *  runEnemyTurn() — movement follows it downhill instead of running a
+	 *  per-mob BFS.
 	 */
-	private function _runOneOpponentTurn( state, opponent, distanceField = javaCast( "null", 0 ) ) {
-		var player = arguments.state.player;
+	private function _runOneOpponentTurn( state, opponent, target, distanceField = javaCast( "null", 0 ) ) {
+		var player = arguments.target;
 		var grid = _stateGrid( arguments.state );
-
-		if ( !structKeyExists( arguments.opponent, "aware" ) ) {
-			arguments.opponent.aware = false;
-		}
-		if ( !arguments.opponent.aware ) {
-			if ( !isNull( grid ) && !hasLineOfSight( grid, arguments.opponent.position, player.position ) ) {
-				return;
-			}
-			arguments.opponent.aware = true;
-			arguments.state.log.prepend( "#arguments.opponent.name# notices you!" );
-		}
 
 		// Regeneration (e.g. a Troll/Oni): heals at the start of every turn it's
 		// alive for, per its parsed trait — simplified from the real rules by
@@ -676,9 +841,8 @@ class singleton {
 	 * has one trigger point per round anyway.
 	 */
 	private function _runLegendaryActions( state ) {
-		var player = arguments.state.player;
 		for ( var opponent in _stateOpponents( arguments.state ) ) {
-			if ( arguments.state.gameOver || player.hitPoints <= 0 || opponent.hitPoints <= 0 ) {
+			if ( arguments.state.gameOver || opponent.hitPoints <= 0 ) {
 				continue;
 			}
 			// Dormant mobs don't act — same awareness gate as _runOneOpponentTurn().
@@ -688,7 +852,14 @@ class singleton {
 			if ( !structKeyExists( opponent, "legendaryActions" ) || opponent.legendaryActions.len() == 0 ) {
 				continue;
 			}
-			_runLegendaryAction( arguments.state, opponent, player );
+			// Same perception-then-threat target as its normal turn — a
+			// legendary action never targets a downed party member (these
+			// are all offensive/self-heal effects, not finishing blows).
+			var target = _selectAggroTarget( arguments.state, opponent );
+			if ( isNull( target ) || target.hitPoints <= 0 ) {
+				continue;
+			}
+			_runLegendaryAction( arguments.state, opponent, target );
 		}
 	}
 
@@ -916,7 +1087,8 @@ class singleton {
 				"conditions": structKeyExists( opp, "conditions" ) ? opp.conditions : {},
 				"inventory": structKeyExists( opp, "inventory" ) ? opp.inventory : [],
 				"vulnerabilities": structKeyExists( opp, "vulnerabilities" ) ? opp.vulnerabilities : [],
-				"immunities": structKeyExists( opp, "immunities" ) ? opp.immunities : []
+				"immunities": structKeyExists( opp, "immunities" ) ? opp.immunities : [],
+				"aggroTarget": structKeyExists( opp, "aggroTarget" ) ? opp.aggroTarget : ""
 			} );
 		}
 		return slim;
@@ -933,7 +1105,10 @@ class singleton {
 	 */
 	private function _otherLivingPositions( state, mover, target ) {
 		var positions = [];
-		var candidates = [ arguments.state.player ];
+		var candidates = [];
+		for ( var member in arguments.state.players ) {
+			candidates.append( member );
+		}
 		for ( var o in _stateOpponents( arguments.state ) ) {
 			candidates.append( o );
 		}
@@ -1729,7 +1904,11 @@ class singleton {
 		}
 
 		var others = [];
-		if ( structKeyExists( arguments.state, "player" ) ) {
+		if ( structKeyExists( arguments.state, "players" ) ) {
+			for ( var member in arguments.state.players ) {
+				others.append( member );
+			}
+		} else if ( structKeyExists( arguments.state, "player" ) ) {
 			others.append( arguments.state.player );
 		}
 		for ( var o in _stateOpponents( arguments.state ) ) {
@@ -1968,6 +2147,7 @@ class singleton {
 					arguments.defender.hitPoints = max( 0, arguments.defender.hitPoints - grazeDamage );
 					arguments.log.prepend( "#arguments.attacker.name#'s Graze still grazes #arguments.defender.name# for #grazeDamage# #arguments.weapon.damageType# damage (#arguments.defender.hitPoints#/#arguments.defender.maxHitPoints# HP)." );
 					_checkConcentration( arguments.log, arguments.defender, grazeDamage );
+					_recordThreat( arguments.defender, arguments.attacker, grazeDamage );
 				}
 			}
 			return;
@@ -2058,6 +2238,7 @@ class singleton {
 
 		arguments.defender.hitPoints = max( 0, arguments.defender.hitPoints - damage );
 		_checkConcentration( arguments.log, arguments.defender, damage );
+		_recordThreat( arguments.defender, arguments.attacker, damage );
 
 		arguments.log.prepend(
 			"#actionPhrase#: #roll# + #arguments.weapon.attackBonus + styleBonus# = #total# vs AC #effectiveAC##coverNote##disadvantageNote##luckNote##styleNote##inspirationNote#. " &
@@ -2168,6 +2349,7 @@ class singleton {
 				"#arguments.attacker.name#'s Cleave also strikes #other.name# for #cleaveDamage# #arguments.weapon.damageType# damage (#other.hitPoints#/#other.maxHitPoints# HP)."
 			);
 			_checkConcentration( arguments.state.log, other, cleaveDamage );
+			_recordThreat( other, arguments.attacker, cleaveDamage );
 			_checkDefenderDefeated( arguments.state, arguments.attacker, other, false );
 			return;
 		}
@@ -2321,6 +2503,7 @@ class singleton {
 			var diceCount = min( arguments.slotLevel + 1, 5 ) + ( isFiendOrUndead ? 1 : 0 );
 			var smiteDamage = _applyDamageModifiers( opponent, rollSum( diceCount, 8 ), "Radiant" );
 			opponent.hitPoints = max( 0, opponent.hitPoints - smiteDamage );
+			_recordThreat( opponent, player, smiteDamage );
 			arguments.state.log.prepend(
 				"#player.name# calls down Divine Smite (spends a level-#arguments.slotLevel# slot)#( isFiendOrUndead ? ' against the #opponent.creatureType#' : '' )#: " &
 				"#smiteDamage# Radiant damage (#opponent.hitPoints#/#opponent.maxHitPoints# HP)."
@@ -2554,6 +2737,7 @@ class singleton {
 
 		defender.hitPoints = max( 0, defender.hitPoints - damage );
 		_checkConcentration( arguments.state.log, defender, damage );
+		_recordThreat( defender, attacker, damage );
 		arguments.state.log.prepend(
 			"#attacker.name# exhales a blast of fire! #defender.name# rolls a DC #dc# Dexterity save: #saveRoll# — " &
 			( saved ? "succeeds, takes half damage. " : "fails! " ) &
@@ -3242,6 +3426,7 @@ class singleton {
 
 		arguments.defender.hitPoints = max( 0, arguments.defender.hitPoints - damage );
 		_checkConcentration( arguments.state.log, arguments.defender, damage );
+		_recordThreat( arguments.defender, arguments.attacker, damage );
 		arguments.state.log.prepend(
 			"#arguments.attacker.name# casts #arguments.spellName##arguments.resourceNote# at #arguments.defender.name#: #roll# + #arguments.attacker.proficiencyBonus + spellMod# = #total# vs AC #effectiveAC##coverNote#. " &
 			( isCrit ? "Critical hit! " : "Hit! " ) &
@@ -3275,6 +3460,7 @@ class singleton {
 
 		arguments.defender.hitPoints = max( 0, arguments.defender.hitPoints - damage );
 		_checkConcentration( arguments.state.log, arguments.defender, damage );
+		_recordThreat( arguments.defender, arguments.attacker, damage );
 		arguments.state.log.prepend(
 			"#arguments.attacker.name# casts #arguments.spellName##arguments.resourceNote# at #arguments.defender.name#: DC #dc# #uCase( arguments.saveAbility )# save — #arguments.defender.name# rolls #saveResult.total#" &
 			( saveResult.hadAdvantage ? " (Advantage)" : "" ) & " — " &
@@ -3295,6 +3481,7 @@ class singleton {
 
 		arguments.defender.hitPoints = max( 0, arguments.defender.hitPoints - damage );
 		_checkConcentration( arguments.state.log, arguments.defender, damage );
+		_recordThreat( arguments.defender, arguments.attacker, damage );
 		arguments.state.log.prepend(
 			"#arguments.attacker.name# casts Magic Missile#arguments.resourceNote# — three darts automatically strike #arguments.defender.name# for #damage# Force damage (#arguments.defender.hitPoints#/#arguments.defender.maxHitPoints# HP)."
 		);
@@ -3489,15 +3676,22 @@ class singleton {
 	 * @state The encounter's full mutable game state struct.
 	 */
 	function rollForInitiative( state ) {
-		var player = arguments.state.player;
 		var opponents = _stateOpponents( arguments.state );
 
 		// "Fought" is counted per encounter, not per kill — every opponent in
-		// this fight's roster, win or lose, the moment combat actually starts.
-		_incrementCharacterStat( player.characterId, "monsters_fought", opponents.len() );
-		player.monstersFought = ( structKeyExists( player, "monstersFought" ) ? player.monstersFought : 0 ) + opponents.len();
-
-		var playerRoll = rollInitiative( player );
+		// this fight's roster, win or lose, the moment combat actually starts —
+		// and every living party member takes credit, not just whoever's active.
+		var bestPlayerRoll = "";
+		var fastestPlayerName = "";
+		for ( var member in arguments.state.players ) {
+			_incrementCharacterStat( member.characterId, "monsters_fought", opponents.len() );
+			member.monstersFought = ( structKeyExists( member, "monstersFought" ) ? member.monstersFought : 0 ) + opponents.len();
+			var r = rollInitiative( member );
+			if ( !isNumeric( bestPlayerRoll ) || r > bestPlayerRoll ) {
+				bestPlayerRoll = r;
+				fastestPlayerName = member.name;
+			}
+		}
 
 		var bestOpponentRoll = "";
 		var fastestOpponentName = "";
@@ -3508,12 +3702,13 @@ class singleton {
 				fastestOpponentName = o.name;
 			}
 		}
-		var playerFirst = ( playerRoll >= bestOpponentRoll );
+		var playerFirst = ( bestPlayerRoll >= bestOpponentRoll );
+		var playerLabel = ( arguments.state.players.len() > 1 ) ? "the party (#fastestPlayerName# leads at #bestPlayerRoll#)" : "#fastestPlayerName# rolls #bestPlayerRoll#";
 		var opponentLabel = ( opponents.len() > 1 ) ? "the enemies (#fastestOpponentName# leads at #bestOpponentRoll#)" : "#fastestOpponentName# rolls #bestOpponentRoll#";
-		var winnerLabel = playerFirst ? player.name : ( opponents.len() > 1 ? "The enemies" : fastestOpponentName );
+		var winnerLabel = playerFirst ? ( arguments.state.players.len() > 1 ? "The party" : fastestPlayerName ) : ( opponents.len() > 1 ? "The enemies" : fastestOpponentName );
 
 		arguments.state.log.prepend(
-			"Initiative: #player.name# rolls #playerRoll#, #opponentLabel#. #winnerLabel# goes first!"
+			"Initiative: #playerLabel#, #opponentLabel#. #winnerLabel# goes first!"
 		);
 
 		if ( playerFirst ) {

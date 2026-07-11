@@ -123,7 +123,7 @@ const CombatEncounter = {
 							<template v-else-if="cs.player.hitPoints <= 0">
 								<p class="encounter-intro">{{ cs.player.name }} is stabilized but unconscious.</p>
 								<div class="action-bar-end">
-									<button type="button" class="btn btn-end-turn" @click="ws('end_turn')">End Turn</button>
+									<button type="button" class="btn btn-end-turn" @click="ws('end_turn')">{{ partyMembers.length > 1 ? 'End Party Turn' : 'End Turn' }}</button>
 								</div>
 							</template>
 							<template v-else>
@@ -167,7 +167,7 @@ const CombatEncounter = {
 								</div>
 
 								<div class="action-bar-end">
-									<button type="button" class="btn btn-end-turn" @click="ws('end_turn')">End Turn</button>
+									<button type="button" class="btn btn-end-turn" @click="ws('end_turn')">{{ partyMembers.length > 1 ? 'End Party Turn' : 'End Turn' }}</button>
 								</div>
 							</template>
 						</template>
@@ -202,30 +202,34 @@ const CombatEncounter = {
 			<!-- Sidebar -->
 			<div class="encounter-sidebar">
 				<div class="combatants">
-					<template v-if="cs.player && cs.player.name">
-						<div :class="['stat-card','stat-card-player', cs.player.hitPoints <= 0 ? 'stat-card-down' : '']">
-							<h2 class="fantasy-heading">{{ cs.player.name }}</h2>
-							<p class="stat-subtitle">Level {{ cs.player.level }} {{ cs.player.class }}{{ cs.player.hitPoints <= 0 ? ' — Unconscious' : (playerBloodied ? ' — Bloodied' : '') }}</p>
-							<div class="hp-bar"><div :class="['hp-bar-fill', playerBloodied ? 'hp-bar-fill-bloodied' : '']" :style="{ width: Math.max(0, cs.player.hitPoints) / cs.player.maxHitPoints * 100 + '%' }"></div></div>
+					<template v-for="(member, memberIdx) in partyMembers" :key="member.characterId || memberIdx">
+						<div
+							:class="['stat-card','stat-card-player', member.hitPoints <= 0 ? 'stat-card-down' : '', (memberIdx+1) === cs.activePlayerIndex ? 'stat-card-active' : '']"
+							:title="partyMembers.length > 1 ? 'Make ' + member.name + ' the active character' : ''"
+							@click="selectActiveCharacter(memberIdx+1)"
+						>
+							<h2 class="fantasy-heading">{{ member.name }}{{ (memberIdx+1) === cs.activePlayerIndex ? ' ⚔' : '' }}</h2>
+							<p class="stat-subtitle">Level {{ member.level }} {{ member.class }}{{ member.hitPoints <= 0 ? ' — Unconscious' : (foeBloodied(member) ? ' — Bloodied' : '') }}</p>
+							<div class="hp-bar"><div :class="['hp-bar-fill', foeBloodied(member) ? 'hp-bar-fill-bloodied' : '']" :style="{ width: Math.max(0, member.hitPoints) / member.maxHitPoints * 100 + '%' }"></div></div>
 							<div class="stat-inline">
-								<span><strong>AC</strong> {{ cs.player.armorClass }}</span>
-								<span><strong>HP</strong> {{ Math.max(0, cs.player.hitPoints) }}/{{ cs.player.maxHitPoints }}</span>
-								<span><strong>Spd</strong> {{ cs.player.speed }} ft.</span>
+								<span><strong>AC</strong> {{ member.armorClass }}</span>
+								<span><strong>HP</strong> {{ Math.max(0, member.hitPoints) }}/{{ member.maxHitPoints }}</span>
+								<span><strong>Spd</strong> {{ member.speed }} ft.</span>
 							</div>
-							<p v-if="cs.player.isDying" class="stat-note"><strong>Death Saves</strong> ✓{{ Math.min(cs.player.deathSaveSuccesses||0,3) }} ✗{{ Math.min(cs.player.deathSaveFailures||0,3) }}</p>
-							<p v-if="cs.player.conditions && Object.keys(cs.player.conditions).length" class="stat-note">
+							<p v-if="member.isDying" class="stat-note"><strong>Death Saves</strong> ✓{{ Math.min(member.deathSaveSuccesses||0,3) }} ✗{{ Math.min(member.deathSaveFailures||0,3) }}</p>
+							<p v-if="member.conditions && Object.keys(member.conditions).length" class="stat-note">
 								<strong>Conditions</strong>
-								<span v-for="(v, cond) in cs.player.conditions" :key="cond" class="condition-chip">{{ cond }}</span>
+								<span v-for="(v, cond) in member.conditions" :key="cond" class="condition-chip">{{ cond }}</span>
 							</p>
-							<ul v-if="cs.player.inventory && cs.player.inventory.length" class="attack-list">
-								<li v-for="w in cs.player.inventory" :key="w.name">{{ w.name }} <span class="attack-stat">+{{ w.attackBonus }} · {{ w.damageDice }}+{{ w.damageBonus }}</span></li>
+							<ul v-if="member.inventory && member.inventory.length" class="attack-list">
+								<li v-for="w in member.inventory" :key="w.name">{{ w.name }} <span class="attack-stat">+{{ w.attackBonus }} · {{ w.damageDice }}+{{ w.damageBonus }}</span></li>
 							</ul>
-							<ul v-if="cs.items && cs.items.length" class="attack-list">
+							<ul v-if="(memberIdx+1) === cs.activePlayerIndex && cs.items && cs.items.length" class="attack-list">
 								<li v-for="item in cs.items" :key="item.id">
 									{{ item.itemName }} <span class="attack-stat">x{{ item.quantity }}</span>
 									<button v-if="itemIsUsable(item.itemName)" type="button" class="btn btn-attack"
-										:disabled="cs.gameOver || cs.autoBattling || cs.player.hitPoints <= 0 || (cs.initiativeRolled && (cs.currentTurn !== 'player' || cs.actionUsed))"
-										@click="ws('use_item',{inventoryId:item.id})"
+										:disabled="cs.gameOver || cs.autoBattling || member.hitPoints <= 0 || (cs.initiativeRolled && (cs.currentTurn !== 'player' || cs.actionUsed))"
+										@click.stop="ws('use_item',{inventoryId:item.id})"
 									>Use</button>
 								</li>
 							</ul>
@@ -239,6 +243,7 @@ const CombatEncounter = {
 						>
 							<h2 class="fantasy-heading">{{ foe.name }}{{ foe.mobIndex === cs.selectedOpponentIndex && foe.hitPoints > 0 ? ' 🎯' : '' }}</h2>
 							<p class="stat-subtitle">{{ foe.creatureType }}{{ foe.hitPoints <= 0 ? ' — Destroyed' : (foeBloodied(foe) ? ' — Bloodied' : '') }}</p>
+							<p v-if="foe.hitPoints > 0 && foe.aggroTarget && partyMembers.length > 1" class="stat-note stat-note-vuln">Focused on {{ foe.aggroTarget }}</p>
 							<div class="hp-bar"><div :class="['hp-bar-fill', foeBloodied(foe) ? 'hp-bar-fill-bloodied' : '']" :style="{ width: Math.max(0, foe.hitPoints) / foe.maxHitPoints * 100 + '%' }"></div></div>
 							<div class="stat-inline">
 								<span><strong>AC</strong> {{ foe.armorClass }}</span>
@@ -292,12 +297,24 @@ const CombatEncounter = {
 
 		const cs = gameState;
 
+		const encounterKey = ref( "" );
+
 		onMounted( async () => {
 			const charId     = localStorage.getItem( "charId" );
 			const moduleSlug = localStorage.getItem( "moduleSlug" ) ?? "";
 			const mapSlug    = localStorage.getItem( "mapSlug" )    ?? "";
 
-			if ( !charId ) {
+			let charIds = null;
+			try {
+				charIds = JSON.parse( localStorage.getItem( "partyCharIds" ) || "null" );
+			} catch ( e ) {
+				charIds = null;
+			}
+			if ( !Array.isArray( charIds ) || !charIds.length ) {
+				charIds = charId ? [ charId ] : [];
+			}
+
+			if ( !charIds.length ) {
 				VueRouter.useRouter().push( "/" );
 				return;
 			}
@@ -305,8 +322,9 @@ const CombatEncounter = {
 			try {
 				const data = await apiCall( "/api/combat.bxm", {
 					method: "POST",
-					body: JSON.stringify( { charId, moduleSlug, mapSlug } )
+					body: JSON.stringify( { charIds, moduleSlug, mapSlug } )
 				} );
+				encounterKey.value = data.encounterKey;
 				applyStateUpdate( data );
 				baseClassCache.clear();
 				mapTiles.value  = data.mapTiles  ?? [];
@@ -350,6 +368,8 @@ const CombatEncounter = {
 				?? ( data.playerDelta ? Object.assign( {}, cs.player, data.playerDelta ) : cs.player );
 			Object.assign( cs, {
 				player,
+				players:               data.players               ?? cs.players,
+				activePlayerIndex:     data.activePlayerIndex      ?? cs.activePlayerIndex,
 				opponents:             data.opponents             ?? cs.opponents,
 				currentTurn:           data.currentTurn           ?? cs.currentTurn,
 				round:                 data.round                 ?? cs.round,
@@ -370,8 +390,12 @@ const CombatEncounter = {
 		}
 
 		function ws( type, extra = {} ) {
-			const charId = localStorage.getItem( "charId" );
-			socket.send( JSON.stringify( { type, charId, ...extra } ) );
+			socket.send( JSON.stringify( { type, encounterKey: encounterKey.value, ...extra } ) );
+		}
+
+		function selectActiveCharacter( playerIndex ) {
+			if ( cs.gameOver || cs.currentTurn !== "player" || playerIndex === cs.activePlayerIndex ) return;
+			ws( "select_active_character", { playerIndex } );
 		}
 
 		function startAutoBattle() {
@@ -491,6 +515,36 @@ const CombatEncounter = {
 			return m;
 		} );
 
+		const partyMembers = computed( () => {
+			if ( cs.players && cs.players.length ) return cs.players;
+			return ( cs.player && cs.player.name ) ? [ cs.player ] : [];
+		} );
+
+		// Non-active party members' tiles, keyed like foeByTile — the active
+		// member's own tile is handled separately (tile-player/⚔) since it's
+		// also the movement/camera anchor.
+		const allyByTile = computed( () => {
+			const m = Object.create( null );
+			partyMembers.value.forEach( ( p, i ) => {
+				if ( ( i + 1 ) !== cs.activePlayerIndex && p.hitPoints > 0 && p.position ) {
+					m[ p.position.x + "," + p.position.y ] = p;
+				}
+			} );
+			return m;
+		} );
+
+		function allyAt( x, y ) {
+			return allyByTile.value[ x + "," + y ] ?? null;
+		}
+
+		function partyIndexAt( x, y ) {
+			for ( let i = 0; i < partyMembers.value.length; i++ ) {
+				const p = partyMembers.value[ i ];
+				if ( p.hitPoints > 0 && p.position && p.position.x === x && p.position.y === y ) return i + 1;
+			}
+			return 0;
+		}
+
 		const poiByTile = computed( () => {
 			const m = Object.create( null );
 			for ( const p of mapPois.value ) {
@@ -529,6 +583,7 @@ const CombatEncounter = {
 			const base = baseTileClass( x, y );
 
 			if ( cs.player && cs.player.position && cs.player.position.x === x && cs.player.position.y === y ) return base + " tile-player";
+			if ( allyAt( x, y ) ) return base + " tile-ally";
 			const foe = opponentAt( x, y );
 			if ( foe ) {
 				const isTarget = foe.mobIndex === cs.selectedOpponentIndex;
@@ -543,6 +598,8 @@ const CombatEncounter = {
 
 		function tileTitle( x, y ) {
 			if ( cs.player && cs.player.position && cs.player.position.x === x && cs.player.position.y === y ) return cs.player.name;
+			const ally = allyAt( x, y );
+			if ( ally ) return ally.name + " (click to make active)";
 			const foe = opponentAt( x, y );
 			if ( foe ) return foe.name;
 			const poi = poiTypeAt( x, y );
@@ -553,6 +610,7 @@ const CombatEncounter = {
 
 		function tileEmoji( x, y ) {
 			if ( cs.player && cs.player.position && cs.player.position.x === x && cs.player.position.y === y ) return "⚔";
+			if ( allyAt( x, y ) ) return "🛡";
 			const foe = opponentAt( x, y );
 			if ( foe ) return "☠";
 			const poi = poiTypeAt( x, y );
@@ -562,7 +620,13 @@ const CombatEncounter = {
 		}
 
 		function tileClick( x, y ) {
-			if ( cs.gameOver || cs.autoBattling || cs.currentTurn !== "player" || cs.player.hitPoints <= 0 ) return;
+			if ( cs.gameOver || cs.autoBattling || cs.currentTurn !== "player" ) return;
+			const allyIndex = partyIndexAt( x, y );
+			if ( allyIndex && allyIndex !== cs.activePlayerIndex ) {
+				selectActiveCharacter( allyIndex );
+				return;
+			}
+			if ( cs.player.hitPoints <= 0 ) return;
 			const foe = opponentAt( x, y );
 			if ( foe ) {
 				ws( "select_target", { mobIndex: foe.mobIndex } );
@@ -682,14 +746,14 @@ const CombatEncounter = {
 		}
 
 		return {
-			cs, loading, mapLoaded, mapWidth, mapHeight,
+			cs, loading, mapLoaded, mapWidth, mapHeight, partyMembers,
 			vpMinCol, vpMinRow, viewportCols, viewportRows,
 			asiMode, asiAbility1, asiAbility2, asiSelectedFeat, asiSelectedSkills, restDiceCount,
 			abilityAbbrs, ALL_SKILLS, availableLevelUpFeats,
 			playerBloodied, visibleFoes, foeBloodied, remainingAttacks, canOffHandAttack,
 			hasActionOptions, hasBonusOptions,
 			canRest, maxRestDice, hoursUntilNextLongRest, gameClockLabel,
-			tileClass, tileTitle, tileEmoji, tileClick,
+			tileClass, tileTitle, tileEmoji, tileClick, selectActiveCharacter,
 			playerHasFeature, hasSpellResource, itemIsUsable, describeSpell,
 			ws, startAutoBattle, stopAutoBattle, confirmAsi, confirmFeat, toggleAsiSkill
 		};

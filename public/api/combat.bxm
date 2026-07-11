@@ -11,9 +11,23 @@
 <bx:script>
 
 	body = jsonDeserialize( getHttpRequestData().content );
-	charId = body.charId;
+	charIds = body.charIds ?: ( structKeyExists( body, "charId" ) ? [ body.charId ] : [] );
 </bx:script>
-<bx:if !auth.ownsCharacter( userId, charId )>
+<bx:if charIds.len() == 0>
+	<bx:header statuscode="400" statustext="Bad Request">
+	<bx:script>writeOutput( jsonSerialize( { "error": "No characters selected" } ) ); return;</bx:script>
+</bx:if>
+<bx:script>
+
+	forbidden = false;
+	for ( id in charIds ) {
+		if ( !auth.ownsCharacter( userId, id ) ) {
+			forbidden = true;
+			break;
+		}
+	}
+</bx:script>
+<bx:if forbidden>
 	<bx:header statuscode="403" statustext="Forbidden">
 	<bx:script>writeOutput( jsonSerialize( { "error": "Forbidden" } ) ); return;</bx:script>
 </bx:if>
@@ -23,12 +37,25 @@
 	characterService = new models.CharacterService();
 	mapService = new models.MapService();
 
-	player = combatService.loadCharacter( charId );
-	items = characterService.getItemInventory( charId );
-
-	if ( player.hitPoints <= 0 ) {
-		combatService.longRest( player, true );
+	players = [];
+	for ( id in charIds ) {
+		member = combatService.loadCharacter( id );
+		if ( member.hitPoints <= 0 ) {
+			combatService.longRest( member, true );
+		}
+		players.append( member );
 	}
+	player = players[ 1 ];
+	// The action bar's Use Item panel operates on whichever character is
+	// currently active (see WebSocket.bx's _handleUseItem/_handleSelectActiveCharacter) —
+	// inventories aren't merged across the party.
+	items = characterService.getItemInventory( player.characterId );
+
+	averageLevel = 0;
+	for ( member in players ) {
+		averageLevel += member.level;
+	}
+	averageLevel = max( 1, round( averageLevel / players.len() ) );
 
 	moduleSlug = body.moduleSlug ?: "";
 	mapSlug = body.mapSlug    ?: "";
@@ -40,13 +67,20 @@
 		: mapService.getLevel( "openField" );
 
 	player.position = { "x": map.playerSpawn.x, "y": map.playerSpawn.y };
+	takenPositions = [ player.position ];
+	if ( players.len() > 1 ) {
+		otherPositions = combatService.randomOpenTilesNear( map, map.playerSpawn, 2, players.len() - 1, takenPositions );
+		for ( i = 2; i <= players.len(); i++ ) {
+			players[ i ].position = ( ( i - 1 ) <= otherPositions.len() ) ? otherPositions[ i - 1 ] : { "x": map.playerSpawn.x, "y": map.playerSpawn.y };
+			takenPositions.append( players[ i ].position );
+		}
+	}
 
 	// Build opponent roster from spawn POIs if present, otherwise fall back to random.
 	spawnPois = map.pois.filter( function( p ) { return p.type == "spawn"; } );
 
 	if ( spawnPois.len() == 0 ) {
-		opponents = combatService.randomMonstersForLevel( player.level, randRange( 2, 3 ) );
-		takenPositions = [ player.position ];
+		opponents = combatService.randomMonstersForLevel( averageLevel, randRange( 2, 3 ) );
 		positions = combatService.randomOpenTilesNear( map, map.opponentSpawn, 5, opponents.len(), takenPositions );
 		for ( i = 1; i <= opponents.len(); i++ ) {
 			opponents[ i ].position = ( i <= positions.len() ) ? positions[ i ] : { "x": map.opponentSpawn.x, "y": map.opponentSpawn.y };
@@ -54,8 +88,7 @@
 			opponents[ i ].visible  = false;
 		}
 	} else {
-		opponents      = [];
-		takenPositions = [ player.position ];
+		opponents = [];
 
 		for ( spawnPoi in spawnPois ) {
 			payload = spawnPoi.payload;
@@ -74,7 +107,7 @@
 					mobs.append( duplicate( template ) );
 				}
 			} else {
-				mobs = combatService.randomMonstersForLevel( player.level, spawnCount );
+				mobs = combatService.randomMonstersForLevel( averageLevel, spawnCount );
 			}
 
 			positions = combatService.randomOpenTilesNear( map, { "x": spawnPoi.x, "y": spawnPoi.y }, 5, mobs.len(), takenPositions );
@@ -87,7 +120,7 @@
 		}
 
 		if ( opponents.len() == 0 ) {
-			opponents = combatService.randomMonstersForLevel( player.level, 1 );
+			opponents = combatService.randomMonstersForLevel( averageLevel, 1 );
 			opponents[ 1 ].position = { "x": spawnPois[ 1 ].x, "y": spawnPois[ 1 ].y };
 			opponents[ 1 ].visible  = false;
 		}
@@ -97,16 +130,27 @@
 		}
 	}
 
-	// Set initial visibility via line-of-sight so mobs in range appear in the sidebar immediately.
+	// Set initial visibility via line-of-sight so mobs in range appear in the
+	// sidebar immediately — a mob is visible if any party member can see it.
 	anyVisible = false;
 	for ( opp in opponents ) {
-		opp.visible = combatService.hasLineOfSight( map, opp.position, player.position );
+		opp.visible = false;
+		for ( member in players ) {
+			if ( combatService.hasLineOfSight( map, opp.position, member.position ) ) {
+				opp.visible = true;
+				break;
+			}
+		}
 		if ( opp.visible ) { anyVisible = true; }
 	}
 
+	encounterKey = createUUID();
+
 	state = {
 		"ownerUserId"           : userId,
+		"players"               : players,
 		"player"                : player,
+		"activePlayerIndex"     : 1,
 		"opponents"             : opponents,
 		"opponent"              : opponents[ 1 ],
 		"map"                   : map,
@@ -137,20 +181,23 @@
 		"asiSelectedSkills"     : []
 	};
 	if ( anyVisible ) {
-		player.inCombat          = true;
+		for ( member in players ) { member.inCombat = true; }
 		state.initiativeRolled   = true;
 		combatService.rollForInitiative( state );
 	} else {
-		player.inCombat = false;
+		for ( member in players ) { member.inCombat = false; }
 	}
 
 	if ( !structKeyExists( application, "encounters" ) ) {
 		application.encounters = {};
 	}
-	application.encounters[ charId ] = state;
+	application.encounters[ encounterKey ] = state;
 
 	writeOutput( jsonSerialize( {
+		"encounterKey"          : encounterKey,
 		"player"                : state.player,
+		"players"               : state.players,
+		"activePlayerIndex"     : state.activePlayerIndex,
 		"opponents"             : combatService.opponentsForClient( state ),
 		"mapWidth"              : map.width,
 		"mapHeight"             : map.height,

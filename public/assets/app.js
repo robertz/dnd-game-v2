@@ -54,8 +54,18 @@ const CharacterSelect = {
 							v-for="character in characters"
 							:key="character.id"
 							class="creation-card char-card"
+							:class="{ 'char-card-party-selected': isInParty( character.id ) }"
 							@click="selectCharacter( character.id )"
 						>
+							<label class="char-card-party-toggle" :title="'Add ' + character.name + ' to the party'" @click.stop>
+								<input
+									type="checkbox"
+									:checked="isInParty( character.id )"
+									:disabled="!isInParty( character.id ) && party.length >= 4"
+									@change="togglePartyMember( character.id )"
+								>
+								Bring on adventure
+							</label>
 							<div class="char-card-header">
 								<h3 class="fantasy-heading">{{ character.name }}</h3>
 								<span class="char-level-badge">Lv {{ character.level }}</span>
@@ -101,7 +111,7 @@ const CharacterSelect = {
 
 							<div class="char-card-footer">
 								<span class="stat-subtitle" v-if="character.lastPlayed">Last played {{ character.lastPlayed }}</span>
-								<button type="button" class="btn btn-sm btn-attack" @click.stop="playCharacter( character.id )">Adventure</button>
+								<button type="button" class="btn btn-sm btn-attack" @click.stop="playCharacter( character.id )">Adventure Solo</button>
 							</div>
 						</div>
 					</div>
@@ -109,6 +119,12 @@ const CharacterSelect = {
 
 				<div class="turn-actions">
 					<router-link class="btn btn-auto-battle" to="/character/new">Create New Character</router-link>
+					<button
+						v-if="party.length > 0"
+						type="button"
+						class="btn btn-attack"
+						@click="startPartyAdventure"
+					>Start Adventure with Party ({{ party.length }}/4)</button>
 				</div>
 			</div>
 		</div>
@@ -118,6 +134,7 @@ const CharacterSelect = {
 		const characters = ref( [] );
 		const loading    = ref( true );
 		const error      = ref( "" );
+		const party      = ref( [] );
 
 		onMounted( async () => {
 			try {
@@ -136,6 +153,27 @@ const CharacterSelect = {
 
 		function playCharacter( id ) {
 			localStorage.setItem( "charId", id );
+			localStorage.setItem( "partyCharIds", JSON.stringify( [ id ] ) );
+			router.push( "/adventure" );
+		}
+
+		function isInParty( id ) {
+			return party.value.includes( id );
+		}
+
+		function togglePartyMember( id ) {
+			const idx = party.value.indexOf( id );
+			if ( idx !== -1 ) {
+				party.value.splice( idx, 1 );
+			} else if ( party.value.length < 4 ) {
+				party.value.push( id );
+			}
+		}
+
+		function startPartyAdventure() {
+			if ( party.value.length === 0 ) return;
+			localStorage.setItem( "charId", party.value[ 0 ] );
+			localStorage.setItem( "partyCharIds", JSON.stringify( party.value ) );
 			router.push( "/adventure" );
 		}
 
@@ -157,7 +195,11 @@ const CharacterSelect = {
 
 		const abilityOrder = [ "str", "dex", "con", "int", "wis", "cha" ];
 
-		return { characters, loading, error, selectCharacter, playCharacter, abilityMod, hpPercent, xpPercent, abilityOrder };
+		return {
+			characters, loading, error, party, selectCharacter, playCharacter,
+			isInParty, togglePartyMember, startPartyAdventure,
+			abilityMod, hpPercent, xpPercent, abilityOrder
+		};
 	}
 };
 
@@ -194,6 +236,8 @@ socket.onclose = () => console.log( "SocketBox closed" );
 
 const gameState = reactive( {
 	player:                {},
+	players:               [],
+	activePlayerIndex:     1,
 	opponents:             [],
 	items:                 [],
 	currentTurn:           "player",

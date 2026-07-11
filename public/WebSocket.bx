@@ -13,7 +13,7 @@ class extends="modules.socketbox.models.WebSocketCore" {
 
 	public function onMessage( required message, required channel ) {
 		var data  = jsonDeserialize( message );
-		var state = application.encounters[ data.charId ] ?: "";
+		var state = application.encounters[ data.encounterKey ] ?: "";
 
 		if ( isSimpleValue( state ) ) {
 			sendMessage( jsonSerialize( { "type": "error", "message": "No active encounter" } ), channel );
@@ -82,6 +82,9 @@ class extends="modules.socketbox.models.WebSocketCore" {
 			case "select_target":
 				_handleSelectTarget( state, data );
 				break;
+			case "select_active_character":
+				_handleSelectActiveCharacter( state, data, combatService, characterService );
+				break;
 			case "confirm_asi":
 				_handleConfirmAsi( state, data, combatService );
 				break;
@@ -105,7 +108,7 @@ class extends="modules.socketbox.models.WebSocketCore" {
 		if ( state.log.len() > 100 ) {
 			state.log = arraySlice( state.log, 1, 100 );
 		}
-		application.encounters[ data.charId ] = state;
+		application.encounters[ data.encounterKey ] = state;
 		sendMessage( jsonSerialize( _buildBroadcast( state, combatService ) ), channel );
 	}
 
@@ -186,7 +189,10 @@ class extends="modules.socketbox.models.WebSocketCore" {
 		arguments.combatService.playerAttack( arguments.state, choice.weapon, choice.disadvantage );
 		arguments.state.selectedOpponentIndex = arguments.state.opponent.mobIndex;
 
-		if ( !arguments.state.gameOver && arguments.state.attacksUsedThisTurn >= arguments.combatService.attacksPerTurn( player ) ) {
+		if (
+			!arguments.state.gameOver && arguments.state.attacksUsedThisTurn >= arguments.combatService.attacksPerTurn( player ) &&
+			arguments.combatService.allPlayersExhausted( arguments.state )
+		) {
 			arguments.combatService.endPlayerTurn( arguments.state );
 		}
 	}
@@ -202,7 +208,7 @@ class extends="modules.socketbox.models.WebSocketCore" {
 		arguments.state.opponent = arguments.state.opponents[ arguments.state.selectedOpponentIndex ];
 		arguments.combatService.castCantrip( arguments.state, arguments.data.spellName );
 		arguments.state.selectedOpponentIndex = arguments.state.opponent.mobIndex;
-		if ( !arguments.state.gameOver ) {
+		if ( !arguments.state.gameOver && arguments.combatService.allPlayersExhausted( arguments.state ) ) {
 			arguments.combatService.endPlayerTurn( arguments.state );
 		}
 	}
@@ -218,7 +224,7 @@ class extends="modules.socketbox.models.WebSocketCore" {
 		arguments.state.opponent = arguments.state.opponents[ arguments.state.selectedOpponentIndex ];
 		arguments.combatService.castLeveledSpell( arguments.state, arguments.data.spellName );
 		arguments.state.selectedOpponentIndex = arguments.state.opponent.mobIndex;
-		if ( !arguments.state.gameOver ) {
+		if ( !arguments.state.gameOver && arguments.combatService.allPlayersExhausted( arguments.state ) ) {
 			arguments.combatService.endPlayerTurn( arguments.state );
 		}
 	}
@@ -236,7 +242,10 @@ class extends="modules.socketbox.models.WebSocketCore" {
 		arguments.state.actionUsed = true;
 		arguments.combatService.smiteAttack( arguments.state, arguments.data.slotLevel );
 		arguments.state.selectedOpponentIndex = arguments.state.opponent.mobIndex;
-		if ( !arguments.state.gameOver && arguments.state.attacksUsedThisTurn >= arguments.combatService.attacksPerTurn( arguments.state.player ) ) {
+		if (
+			!arguments.state.gameOver && arguments.state.attacksUsedThisTurn >= arguments.combatService.attacksPerTurn( arguments.state.player ) &&
+			arguments.combatService.allPlayersExhausted( arguments.state )
+		) {
 			arguments.combatService.endPlayerTurn( arguments.state );
 		}
 	}
@@ -262,7 +271,7 @@ class extends="modules.socketbox.models.WebSocketCore" {
 		arguments.state.opponent = arguments.state.opponents[ arguments.state.selectedOpponentIndex ];
 		arguments.combatService.attemptGrapple( arguments.state, arguments.state.player, arguments.state.opponent );
 		arguments.state.selectedOpponentIndex = arguments.state.opponent.mobIndex;
-		if ( !arguments.state.gameOver ) {
+		if ( !arguments.state.gameOver && arguments.combatService.allPlayersExhausted( arguments.state ) ) {
 			arguments.combatService.endPlayerTurn( arguments.state );
 		}
 	}
@@ -278,7 +287,7 @@ class extends="modules.socketbox.models.WebSocketCore" {
 		arguments.state.opponent = arguments.state.opponents[ arguments.state.selectedOpponentIndex ];
 		arguments.combatService.attemptShove( arguments.state, arguments.state.player, arguments.state.opponent );
 		arguments.state.selectedOpponentIndex = arguments.state.opponent.mobIndex;
-		if ( !arguments.state.gameOver ) {
+		if ( !arguments.state.gameOver && arguments.combatService.allPlayersExhausted( arguments.state ) ) {
 			arguments.combatService.endPlayerTurn( arguments.state );
 		}
 	}
@@ -294,7 +303,7 @@ class extends="modules.socketbox.models.WebSocketCore" {
 		arguments.state.opponent = arguments.state.opponents[ arguments.state.selectedOpponentIndex ];
 		arguments.combatService.useBreathWeapon( arguments.state );
 		arguments.state.selectedOpponentIndex = arguments.state.opponent.mobIndex;
-		if ( !arguments.state.gameOver ) {
+		if ( !arguments.state.gameOver && arguments.combatService.allPlayersExhausted( arguments.state ) ) {
 			arguments.combatService.endPlayerTurn( arguments.state );
 		}
 	}
@@ -326,7 +335,9 @@ class extends="modules.socketbox.models.WebSocketCore" {
 		arguments.state.items = arguments.characterService.getItemInventory( arguments.state.player.characterId );
 		if ( arguments.state.initiativeRolled ) {
 			arguments.state.actionUsed = true;
-			arguments.combatService.endPlayerTurn( arguments.state );
+			if ( arguments.combatService.allPlayersExhausted( arguments.state ) ) {
+				arguments.combatService.endPlayerTurn( arguments.state );
+			}
 		}
 	}
 
@@ -365,7 +376,7 @@ class extends="modules.socketbox.models.WebSocketCore" {
 			return;
 		}
 		arguments.combatService.rollDeathSave( arguments.state );
-		if ( !arguments.state.gameOver ) {
+		if ( !arguments.state.gameOver && arguments.combatService.allPlayersExhausted( arguments.state ) ) {
 			arguments.combatService.endPlayerTurn( arguments.state );
 		}
 	}
@@ -396,13 +407,49 @@ class extends="modules.socketbox.models.WebSocketCore" {
 				arguments.state.selectedOpponentIndex = arguments.state.opponent.mobIndex;
 			}
 			if ( !arguments.state.gameOver ) {
-				arguments.combatService.endPlayerTurn( arguments.state );
+				if ( arguments.combatService.allPlayersExhausted( arguments.state ) ) {
+					arguments.combatService.endPlayerTurn( arguments.state );
+				} else {
+					_autoAdvanceActiveCharacter( arguments.state, arguments.combatService );
+				}
 			}
 		}
 
 		if ( arguments.state.gameOver ) {
 			arguments.state.autoBattling = false;
 		}
+	}
+
+	/**
+	 * Auto-battle helper: once the currently active party member has spent
+	 * their action economy but other living members haven't, switches to the
+	 * next un-acted member instead of ending the party's turn — so auto-step
+	 * cycles through the whole party before handing off to the enemy.
+	 */
+	private function _autoAdvanceActiveCharacter( state, combatService ) {
+		var total = arguments.state.players.len();
+		for ( var offset = 1; offset <= total; offset++ ) {
+			var idx = ( ( arguments.state.activePlayerIndex - 1 + offset ) mod total ) + 1;
+			var member = arguments.state.players[ idx ];
+			if ( member.hitPoints <= 0 ) {
+				continue;
+			}
+			var isActive = ( idx == arguments.state.activePlayerIndex );
+			var actionUsed          = isActive ? arguments.state.actionUsed          : ( structKeyExists( member, "actionUsed" )          ? member.actionUsed          : false );
+			var attacksUsedThisTurn = isActive ? arguments.state.attacksUsedThisTurn : ( structKeyExists( member, "attacksUsedThisTurn" ) ? member.attacksUsedThisTurn : 0 );
+			if ( !actionUsed || attacksUsedThisTurn < arguments.combatService.attacksPerTurn( member ) ) {
+				arguments.combatService.switchActivePlayer( arguments.state, idx );
+				return;
+			}
+		}
+	}
+
+	private function _handleSelectActiveCharacter( state, data, combatService, characterService ) {
+		if ( arguments.state.gameOver || arguments.state.currentTurn != "player" ) {
+			return;
+		}
+		arguments.combatService.switchActivePlayer( arguments.state, int( val( arguments.data.playerIndex ) ) );
+		arguments.state.items = arguments.characterService.getItemInventory( arguments.state.player.characterId );
 	}
 
 	private function _handleSelectTarget( state, data ) {
@@ -450,12 +497,15 @@ class extends="modules.socketbox.models.WebSocketCore" {
 		arguments.state.gameOver              = false;
 		arguments.state.outcome               = "";
 		arguments.state.initiativeRolled      = false;
-		arguments.state.player.inCombat       = false;
 		arguments.state.stateSaved            = false;
 		arguments.state.round                 = 1;
 		arguments.state.currentTurn           = "player";
 		arguments.state.autoBattling          = false;
-		arguments.state.movementRemaining     = int( arguments.state.player.speed / 5 );
+		for ( var member in arguments.state.players ) {
+			member.inCombat = false;
+			member.movementRemaining = max( 0, int( member.speed / 5 ) );
+		}
+		arguments.state.movementRemaining     = arguments.state.player.movementRemaining;
 		arguments.state.log                   = [ "The dungeon is cleared. You stand victorious." ];
 	}
 
@@ -492,7 +542,9 @@ class extends="modules.socketbox.models.WebSocketCore" {
 
 	private function _updateCombatState( state, combatService ) {
 		if ( arguments.state.gameOver ) {
-			arguments.state.player.inCombat = false;
+			for ( var member in arguments.state.players ) {
+				member.inCombat = false;
+			}
 			return;
 		}
 		var player      = arguments.state.player;
@@ -503,7 +555,9 @@ class extends="modules.socketbox.models.WebSocketCore" {
 				nowInCombat = true;
 			}
 		}
-		player.inCombat = nowInCombat;
+		for ( var member in arguments.state.players ) {
+			member.inCombat = nowInCombat;
+		}
 
 		if ( nowInCombat && !arguments.state.initiativeRolled ) {
 			arguments.state.initiativeRolled = true;
@@ -638,8 +692,10 @@ class extends="modules.socketbox.models.WebSocketCore" {
 	private function _maybeSaveProgress( state, combatService ) {
 		if ( arguments.state.gameOver && !arguments.state.stateSaved ) {
 			arguments.state.stateSaved = true;
-			arguments.state.player.inCombat = false;
-			arguments.combatService.saveCharacterState( arguments.state.player );
+			for ( var member in arguments.state.players ) {
+				member.inCombat = false;
+				arguments.combatService.saveCharacterState( member );
+			}
 		}
 	}
 
@@ -669,6 +725,8 @@ class extends="modules.socketbox.models.WebSocketCore" {
 		var payload = {
 			"type"                  : "state_update",
 			"playerDelta"           : _playerDelta( arguments.state ),
+			"players"               : arguments.state.players,
+			"activePlayerIndex"     : arguments.state.activePlayerIndex,
 			"opponents"             : arguments.combatService.opponentsForClient( arguments.state ),
 			"currentTurn"           : arguments.state.currentTurn,
 			"round"                 : arguments.state.round,
