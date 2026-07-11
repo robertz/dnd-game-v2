@@ -2435,7 +2435,7 @@ class singleton {
 		if ( defender.hitPoints <= 0 ) {
 			if ( !structKeyExists( defender, "xpAwarded" ) || !defender.xpAwarded ) {
 				defender.xpAwarded = true;
-				awardExperience( arguments.state, defender.xp );
+				_awardPartyExperience( arguments.state, defender.xp );
 				_incrementCharacterStat( attacker.characterId, "monsters_killed" );
 				attacker.monstersKilled = ( structKeyExists( attacker, "monstersKilled" ) ? attacker.monstersKilled : 0 ) + 1;
 				if ( structKeyExists( arguments.state, "round" ) ) {
@@ -3557,7 +3557,7 @@ class singleton {
 
 		if ( !structKeyExists( arguments.defender, "xpAwarded" ) || !arguments.defender.xpAwarded ) {
 			arguments.defender.xpAwarded = true;
-			awardExperience( arguments.state, arguments.defender.xp );
+			_awardPartyExperience( arguments.state, arguments.defender.xp );
 			_incrementCharacterStat( arguments.state.player.characterId, "monsters_killed" );
 			arguments.state.player.monstersKilled = ( structKeyExists( arguments.state.player, "monstersKilled" ) ? arguments.state.player.monstersKilled : 0 ) + 1;
 			_grantMonsterLoot( arguments.state, arguments.defender );
@@ -3811,8 +3811,41 @@ class singleton {
 		);
 	}
 
-	function awardExperience( state, xp ) {
-		var player = arguments.state.player;
+	/**
+	 * Splits `xp` evenly (rounded down) across every character in
+	 * `state.players` and awards each their share via awardExperience() —
+	 * everyone in the party benefits from a kill, not just whoever's
+	 * currently active/landed the blow. Downed-but-not-dead members still
+	 * get a share (this app has no "left the party" state to exclude
+	 * anyone by), matching the SRD's usual "everyone present splits it"
+	 * guidance. A party of one gets the full amount, same as before party
+	 * play existed.
+	 *
+	 * @state The encounter's full mutable game state struct.
+	 * @xp The opponent's total XP award, before splitting.
+	 */
+	private function _awardPartyExperience( state, xp ) {
+		var share = int( arguments.xp / arguments.state.players.len() );
+		if ( share <= 0 ) {
+			return;
+		}
+		for ( var member in arguments.state.players ) {
+			awardExperience( arguments.state, share, member );
+		}
+	}
+
+	/**
+	 * Awards `xp` to `player` specifically (see _awardPartyExperience() for
+	 * the usual party-wide entry point every opponent-defeated call site
+	 * actually uses) — persists it immediately and cascades through as
+	 * many level-ups as the new total crosses thresholds for.
+	 *
+	 * @state The encounter's full mutable game state struct.
+	 * @xp The amount of XP being awarded to `player`.
+	 * @player The specific character struct being credited.
+	 */
+	function awardExperience( state, xp, player ) {
+		var player = arguments.player;
 
 		queryExecute(
 			"UPDATE characters SET experience_points = experience_points + :xp WHERE id = :characterId",
@@ -3839,7 +3872,7 @@ class singleton {
 		var targetLevel = levelForXp( newTotalXp );
 		var leveledUp = false;
 		while ( currentLevel < targetLevel ) {
-			_levelUp( arguments.state );
+			_levelUp( arguments.state, player );
 			currentLevel = structKeyExists( player, "totalLevel" ) ? player.totalLevel : player.level;
 			leveledUp = true;
 		}
@@ -4023,16 +4056,19 @@ class singleton {
 	}
 
 	/**
-	 * Applies one level's worth of advancement to `state.player`, per
-	 * "Gaining a Level": +1 Hit Die worth of HP (using the *leveling
-	 * class's* fixed value + Constitution modifier, minimum 1 — see
+	 * Applies one level's worth of advancement to `player`, per "Gaining a
+	 * Level": +1 Hit Die worth of HP (using the *leveling class's* fixed
+	 * value + Constitution modifier, minimum 1 — see
 	 * _levelingClassFor()/multiclassing above), an increased Proficiency
 	 * Bonus (by total character level) at the levels that grant one
 	 * (bumping equipped weapons' attack bonus to match), and any new class
 	 * features that class unlocks at its new level.
+	 *
+	 * @state The encounter's full mutable game state struct.
+	 * @player The specific character struct leveling up.
 	 */
-	private function _levelUp( state ) {
-		var player = arguments.state.player;
+	private function _levelUp( state, player ) {
+		var player = arguments.player;
 		var levelingClass = _levelingClassFor( player );
 		levelingClass.level += 1;
 		// `player.level`/`hitDiceMax` mirror the original class specifically
