@@ -45,18 +45,6 @@ class singleton {
 		2, 2, 3, 3, 3, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5, 6, 6, 6, 6, 6
 	];
 
-	// Sight range cap for every hasLineOfSight() check: 60 feet = 12 squares
-	// (5 ft each). Nothing perceives, targets, or shoots past this, walls or not.
-	MAX_SIGHT_SQUARES = 12;
-	// How far (in path squares) the per-round distance field floods out from
-	// the player — see _distanceField(). Caps enemy-turn cost by map area: an
-	// alerted mob that's fallen farther behind than this idles (it stays
-	// alerted, and resumes the chase once the player is back inside range).
-	// Generous vs. MAX_SIGHT_SQUARES (200 ft of chase memory against 60 ft of
-	// sight) while keeping the flood window small enough (~81x81 worst case)
-	// that a round stays well under half a second even on an open field —
-	// the flood costs ~40µs per open tile, so this value is quadratic in cost.
-	MOB_PURSUIT_SQUARES = 40;
 	SHORT_REST_SECONDS = 60 * 60;
 	LONG_REST_SECONDS = 8 * 60 * 60;
 	LONG_REST_COOLDOWN_SECONDS = 24 * 60 * 60;
@@ -99,6 +87,7 @@ class singleton {
 	function init() {
 		variables.dice  = new models.combat.DiceService();
 		variables.rules = new models.combat.RulesService();
+		variables.grid  = new models.combat.GridService();
 		return this;
 	}
 
@@ -124,6 +113,31 @@ class singleton {
 	private function _resolveSpeciesMechanics( species ) { return variables.rules.resolveSpeciesMechanics( argumentCollection = arguments ); }
 	private function _skillProficienciesFromTraits( traitNames, background ) { return variables.rules.skillProficienciesFromTraits( argumentCollection = arguments ); }
 	private function _skillProficiencyBonus( combatant, skill ) { return variables.rules.skillProficiencyBonus( argumentCollection = arguments ); }
+
+	// ── Delegators: GridService ───────────────────────────────────────────────
+	// moveToward/stepAlongDistanceField keep the cantMove() condition guard
+	// here — conditions are combat rules, not geometry.
+	function moveToward( mover, target, maxSteps, grid = javaCast( "null", 0 ), occupiedPositions = [] ) {
+		if ( cantMove( arguments.mover ) ) {
+			return 0;
+		}
+		return variables.grid.moveToward( argumentCollection = arguments );
+	}
+	function isWalkable( grid, x, y ) { return variables.grid.isWalkable( argumentCollection = arguments ); }
+	function pathDistance( grid, from, to ) { return variables.grid.pathDistance( argumentCollection = arguments ); }
+	function reachableSquares( grid, start, maxDistance ) { return variables.grid.reachableSquares( argumentCollection = arguments ); }
+	function findOpenTileNear( grid, origin, excludePositions ) { return variables.grid.findOpenTileNear( argumentCollection = arguments ); }
+	function randomOpenTilesNear( grid, center, radius, count, excludePositions ) { return variables.grid.randomOpenTilesNear( argumentCollection = arguments ); }
+	function chebyshev( a, b ) { return variables.grid.chebyshev( argumentCollection = arguments ); }
+	function hasLineOfSight( grid, from, to ) { return variables.grid.hasLineOfSight( argumentCollection = arguments ); }
+	private function _stateGrid( state ) { return variables.grid.stateGrid( argumentCollection = arguments ); }
+	private function _distanceField( grid, origin ) { return variables.grid.distanceField( argumentCollection = arguments ); }
+	private function _stepAlongDistanceField( grid, field, mover, target, maxSteps, occupiedPositions = [] ) {
+		if ( cantMove( arguments.mover ) ) {
+			return 0;
+		}
+		return variables.grid.stepAlongDistanceField( argumentCollection = arguments );
+	}
 
 	/**
 	 * Decides and performs the player's action for one turn: move toward the
@@ -1047,75 +1061,6 @@ class singleton {
 	}
 
 	/**
-	 * Moves `mover` toward `target`, up to `maxSteps`, stopping once adjacent.
-	 * Returns steps taken. Without a `grid`, this is the original straight-line
-	 * Chebyshev stepper (used by tests, and by any caller with no map). With a
-	 * `grid`, it instead follows the shortest wall-avoiding path (via `_bfs()`),
-	 * so a mover on the far side of a wall correctly detours through a doorway
-	 * rather than walking through the wall.
-	 *
-	 * @grid Optional level grid (`{width, height, tiles}`, from MapService) to route around walls.
-	 * @occupiedPositions Optional array of `{x, y}` — other living combatants' positions (never the mover's own or the target's), treated as impassable alongside walls, so two combatants never end up sharing a tile. Only applies with a `grid`; ignored for the no-grid straight-line stepper (only ever used by callers with no map at all — real gameplay always has one).
-	 */
-	function moveToward( mover, target, maxSteps, grid = javaCast( "null", 0 ), occupiedPositions = [] ) {
-		// Restrained/Paralyzed/Petrified/Stunned/Unconscious: speed is
-		// effectively 0 — see cantMove().
-		if ( cantMove( arguments.mover ) ) {
-			return 0;
-		}
-		if ( isNull( arguments.grid ) ) {
-			return _moveTowardUnobstructed( arguments.mover, arguments.target, arguments.maxSteps );
-		}
-
-		var targetX = arguments.target.position.x;
-		var targetY = arguments.target.position.y;
-		var path = _bfs(
-			arguments.grid, arguments.mover.position,
-			( x, y ) => ( max( abs( x - targetX ), abs( y - targetY ) ) <= 1 ),
-			arguments.occupiedPositions
-		);
-		if ( path.len() <= 1 ) {
-			// Already adjacent (path is just the start), or no route exists.
-			return 0;
-		}
-
-		var steps = min( arguments.maxSteps, path.len() - 1 );
-		arguments.mover.position = { "x": path[ steps + 1 ].x, "y": path[ steps + 1 ].y };
-		return steps;
-	}
-
-	/**
-	 * The original obstacle-free mover: steps straight toward `target` one
-	 * square at a time (Chebyshev-shortest path assuming an open grid).
-	 */
-	private function _moveTowardUnobstructed( mover, target, maxSteps ) {
-		var distance = chebyshev( arguments.mover, arguments.target );
-		var steps = 0;
-		while ( distance > 1 && steps < arguments.maxSteps ) {
-			var stepX = sgn( arguments.target.position.x - arguments.mover.position.x );
-			var stepY = sgn( arguments.target.position.y - arguments.mover.position.y );
-			arguments.mover.position = { "x": arguments.mover.position.x + stepX, "y": arguments.mover.position.y + stepY };
-			steps += 1;
-			distance = chebyshev( arguments.mover, arguments.target );
-		}
-		return steps;
-	}
-
-	/**
-	 * Returns the encounter's level grid — `state.grid` if present, falling
-	 * back to `state.map` (the key the WebSocket handler's real encounter
-	 * state uses), or null otherwise — lets playerDecideAndAct()/
-	 * runEnemyTurn() pass a grid through to moveToward() without breaking
-	 * callers (like the unit tests) whose state has no map.
-	 */
-	private function _stateGrid( state ) {
-		if ( structKeyExists( arguments.state, "grid" ) ) {
-			return arguments.state.grid;
-		}
-		return structKeyExists( arguments.state, "map" ) ? arguments.state.map : javaCast( "null", 0 );
-	}
-
-	/**
 	 * Returns `state.opponents` (the full mob roster) if present, or a
 	 * single-element array wrapping `state.opponent` otherwise — lets every
 	 * multi-mob-aware function keep working unchanged for callers (like the
@@ -1248,422 +1193,6 @@ class singleton {
 				return;
 			}
 		}
-	}
-
-	/**
-	 * True if (x, y) is inside `grid` and its tile is "floor" (not "wall").
-	 *
-	 * @grid A level grid (`{width, height, tiles}`, from MapService).
-	 */
-	function isWalkable( grid, x, y ) {
-		if ( arguments.x < 1 || arguments.x > arguments.grid.width || arguments.y < 1 || arguments.y > arguments.grid.height ) {
-			return false;
-		}
-		return arguments.grid.tiles[ arguments.y ][ arguments.x ] == "floor";
-	}
-
-	/**
-	 * Shortest wall-avoiding path length (in squares) from `from` to `to`, or
-	 * -1 if `to` isn't walkable or no path exists. Used to validate a player's
-	 * click-to-move destination against their remaining movement.
-	 *
-	 * @grid A level grid (`{width, height, tiles}`, from MapService).
-	 */
-	function pathDistance( grid, from, to ) {
-		if ( !isWalkable( arguments.grid, arguments.to.x, arguments.to.y ) ) {
-			return -1;
-		}
-		var toX = arguments.to.x;
-		var toY = arguments.to.y;
-		var path = _bfs( arguments.grid, arguments.from, ( x, y ) => ( x == toX && y == toY ) );
-		return ( path.len() == 0 ) ? -1 : ( path.len() - 1 );
-	}
-
-	/**
-	 * Every walkable tile within `maxDistance` squares of `start` (8-directional,
-	 * wall-avoiding — same movement rule pathDistance()/_bfs() use), as a
-	 * `"x,y" -> distance` struct. Unlike pathDistance() (one BFS per
-	 * destination, run once per candidate tile), this is one bounded BFS that
-	 * answers "is any of these tiles reachable" for the whole grid at once —
-	 * built for default.bx's tileReachable(), which used to call
-	 * pathDistance() fresh for every one of a viewport's ~441 tiles on every
-	 * render. Bounded by maxDistance (a movement budget, usually single
-	 * digits) rather than exploring the whole connected component the way a
-	 * single-goal BFS does when the goal is unreachable or far away.
-	 *
-	 * @grid A level grid (`{width, height, tiles}`, from MapService).
-	 * @start `{x, y}` — origin square (distance 0; not included in the result).
-	 * @maxDistance Movement budget in squares; tiles beyond it aren't explored.
-	 */
-	function reachableSquares( grid, start, maxDistance ) {
-		var distances = {};
-		var queue = [ { "x": arguments.start.x, "y": arguments.start.y, "dist": 0 } ];
-		var queueHead = 1;
-
-		while ( queueHead <= queue.len() ) {
-			var current = queue[ queueHead ];
-			queueHead += 1;
-			if ( current.dist >= arguments.maxDistance ) {
-				continue;
-			}
-			for ( var dx = -1; dx <= 1; dx++ ) {
-				for ( var dy = -1; dy <= 1; dy++ ) {
-					if ( dx == 0 && dy == 0 ) {
-						continue;
-					}
-					var nx = current.x + dx;
-					var ny = current.y + dy;
-					if ( !isWalkable( arguments.grid, nx, ny ) ) {
-						continue;
-					}
-					// No corner cutting — same rule as _bfs(), so the move
-					// highlight never offers a tile movement can't actually take.
-					if (
-						dx != 0 && dy != 0 &&
-						( !isWalkable( arguments.grid, current.x + dx, current.y ) || !isWalkable( arguments.grid, current.x, current.y + dy ) )
-					) {
-						continue;
-					}
-					var key = nx & "," & ny;
-					if ( distances.keyExists( key ) ) {
-						continue;
-					}
-					distances[ key ] = current.dist + 1;
-					arrayAppend( queue, { "x": nx, "y": ny, "dist": current.dist + 1 } );
-				}
-			}
-		}
-		return distances;
-	}
-
-	/**
-	 * Finds the closest walkable tile to `origin` that isn't itself in
-	 * `excludePositions` — used to place a second, third, etc. mob near the
-	 * level's one designed opponent spawn point without stacking them on the
-	 * same square or on the player. Returns null if every reachable tile is excluded.
-	 *
-	 * @grid A level grid (`{width, height, tiles}`, from MapService).
-	 * @origin The point to search outward from (typically the level's opponentSpawn).
-	 * @excludePositions Array of `{x, y}` points that don't count as open.
-	 */
-	function findOpenTileNear( grid, origin, excludePositions ) {
-		var excluded = arguments.excludePositions;
-		var path = _bfs( arguments.grid, arguments.origin, ( x, y ) => {
-			for ( var p in excluded ) {
-				if ( p.x == x && p.y == y ) {
-					return false;
-				}
-			}
-			return true;
-		} );
-		return ( path.len() == 0 ) ? javaCast( "null", 0 ) : path[ path.len() ];
-	}
-
-	/**
-	 * Picks up to `count` distinct walkable tiles scattered within `radius`
-	 * squares (Chebyshev distance, matching this game's 8-directional
-	 * movement) of `center`, excluding anything in `excludePositions` — used
-	 * to spread multiple mobs across a level's designed opponentSpawn area
-	 * instead of the tight, nearest-tile-first cluster findOpenTileNear()
-	 * alone produces. Falls back to findOpenTileNear() (BFS outward from
-	 * center) to fill any slots the radius can't cover — e.g. a small room,
-	 * or a scatter radius that clips the level edge.
-	 *
-	 * @grid A level grid (`{width, height, tiles}`, from MapService).
-	 * @center The point to scatter around (typically the level's opponentSpawn).
-	 * @radius How many squares out (Chebyshev) to search for candidates.
-	 * @count How many positions to return.
-	 * @excludePositions Array of `{x, y}` points that don't count as open.
-	 */
-	function randomOpenTilesNear( grid, center, radius, count, excludePositions ) {
-		var excluded = duplicate( arguments.excludePositions );
-		var candidates = [];
-		for ( var dy = -arguments.radius; dy <= arguments.radius; dy++ ) {
-			for ( var dx = -arguments.radius; dx <= arguments.radius; dx++ ) {
-				var x = arguments.center.x + dx;
-				var y = arguments.center.y + dy;
-				if ( !isWalkable( arguments.grid, x, y ) ) {
-					continue;
-				}
-				var isExcluded = false;
-				for ( var p in excluded ) {
-					if ( p.x == x && p.y == y ) {
-						isExcluded = true;
-						break;
-					}
-				}
-				if ( !isExcluded ) {
-					arrayAppend( candidates, { "x": x, "y": y } );
-				}
-			}
-		}
-
-		var picked = [];
-		while ( candidates.len() > 0 && picked.len() < arguments.count ) {
-			var index = randRange( 1, candidates.len() );
-			arrayAppend( picked, candidates[ index ] );
-			arrayAppend( excluded, candidates[ index ] );
-			arrayDeleteAt( candidates, index );
-		}
-
-		while ( picked.len() < arguments.count ) {
-			var fallback = findOpenTileNear( arguments.grid, arguments.center, excluded );
-			if ( isNull( fallback ) ) {
-				break;
-			}
-			arrayAppend( picked, fallback );
-			arrayAppend( excluded, fallback );
-		}
-
-		return picked;
-	}
-
-	/**
-	 * BFS flood fill from `origin` over every walkable tile within
-	 * MOB_PURSUIT_SQUARES path distance (tiles beyond stay -1, so distant
-	 * alerted mobs idle rather than costing pathfinding work), returning a
-	 * `{minX, minY, maxX, maxY, rows}` window of path distances (in squares,
-	 * 8-directional with the same no-corner-cutting rule as _bfs(); read via
-	 * _fieldDistanceAt()); -1 marks walls, unreachable pockets, and anything
-	 * outside the window. Built once per enemy turn by runEnemyTurn() and
-	 * shared by every mob via _stepAlongDistanceField() — replacing one
-	 * full-map BFS *per mob per round*, which stalled the round for tens of
-	 * seconds once a whole map's worth of mobs started converging. Uses
-	 * array indexing (not "x,y" struct keys) throughout because this runs
-	 * over ~10k tiles every single round.
-	 */
-	private function _distanceField( grid, origin ) {
-		var width = arguments.grid.width;
-		var height = arguments.grid.height;
-		var tiles = arguments.grid.tiles;
-		// The field only covers a window of MOB_PURSUIT_SQUARES around the
-		// origin (nothing outside it can be reached within pursuit range) —
-		// allocating full-map-sized rows made the per-round cost scale with
-		// map area again even though the flood itself was capped.
-		var minX = max( 1, arguments.origin.x - MOB_PURSUIT_SQUARES );
-		var maxX = min( width, arguments.origin.x + MOB_PURSUIT_SQUARES );
-		var minY = max( 1, arguments.origin.y - MOB_PURSUIT_SQUARES );
-		var maxY = min( height, arguments.origin.y + MOB_PURSUIT_SQUARES );
-		var rows = [];
-		for ( var y = minY; y <= maxY; y++ ) {
-			var row = [];
-			for ( var x = minX; x <= maxX; x++ ) {
-				arrayAppend( row, -1 );
-			}
-			arrayAppend( rows, row );
-		}
-		var field = { "minX": minX, "minY": minY, "maxX": maxX, "maxY": maxY, "rows": rows };
-		var ox = arguments.origin.x;
-		var oy = arguments.origin.y;
-		if ( ox < 1 || oy < 1 || ox > width || oy > height ) {
-			return field;
-		}
-		rows[ oy - minY + 1 ][ ox - minX + 1 ] = 0;
-		var queue = [ { "x": ox, "y": oy } ];
-		var queueHead = 1;
-		while ( queueHead <= queue.len() ) {
-			var current = queue[ queueHead ];
-			queueHead += 1;
-			var nextDist = rows[ current.y - minY + 1 ][ current.x - minX + 1 ] + 1;
-			if ( nextDist > MOB_PURSUIT_SQUARES ) {
-				continue;
-			}
-			for ( var dx = -1; dx <= 1; dx++ ) {
-				for ( var dy = -1; dy <= 1; dy++ ) {
-					if ( dx == 0 && dy == 0 ) {
-						continue;
-					}
-					var nx = current.x + dx;
-					var ny = current.y + dy;
-					if ( nx < minX || ny < minY || nx > maxX || ny > maxY ) {
-						continue;
-					}
-					if ( tiles[ ny ][ nx ] != "floor" || rows[ ny - minY + 1 ][ nx - minX + 1 ] != -1 ) {
-						continue;
-					}
-					if (
-						dx != 0 && dy != 0 &&
-						( tiles[ current.y ][ nx ] != "floor" || tiles[ ny ][ current.x ] != "floor" )
-					) {
-						continue;
-					}
-					rows[ ny - minY + 1 ][ nx - minX + 1 ] = nextDist;
-					arrayAppend( queue, { "x": nx, "y": ny } );
-				}
-			}
-		}
-		return field;
-	}
-
-	/**
-	 * Path distance recorded in a _distanceField() for map coordinate (x, y),
-	 * or -1 for anything outside the field's window or never reached.
-	 */
-	private function _fieldDistanceAt( field, x, y ) {
-		if ( arguments.x < arguments.field.minX || arguments.x > arguments.field.maxX || arguments.y < arguments.field.minY || arguments.y > arguments.field.maxY ) {
-			return -1;
-		}
-		return arguments.field.rows[ arguments.y - arguments.field.minY + 1 ][ arguments.x - arguments.field.minX + 1 ];
-	}
-
-	/**
-	 * Moves `mover` up to `maxSteps` squares toward the player by walking
-	 * strictly downhill along a _distanceField() — each step picks the
-	 * adjacent tile (same 8-directional, no-corner-cutting adjacency the
-	 * field was built with) with the lowest field value below the current
-	 * one, skipping tiles in `occupiedPositions`. Stops when adjacent to
-	 * `target`, when the mover sits in a pocket the field never reached
-	 * (-1), or when every downhill tile is occupied (the mob behind a
-	 * conga line in a corridor just waits its turn). Returns steps taken.
-	 */
-	private function _stepAlongDistanceField( grid, field, mover, target, maxSteps, occupiedPositions = [] ) {
-		if ( cantMove( arguments.mover ) ) {
-			return 0;
-		}
-		var occupied = {};
-		for ( var p in arguments.occupiedPositions ) {
-			occupied[ p.x & "," & p.y ] = true;
-		}
-		var width = arguments.grid.width;
-		var height = arguments.grid.height;
-		var tiles = arguments.grid.tiles;
-		var steps = 0;
-		while ( steps < arguments.maxSteps && chebyshev( arguments.mover, arguments.target ) > 1 ) {
-			var cx = arguments.mover.position.x;
-			var cy = arguments.mover.position.y;
-			var currentDist = _fieldDistanceAt( arguments.field, cx, cy );
-			if ( currentDist <= 0 ) {
-				break;
-			}
-			var bestDist = currentDist;
-			var bestX = 0;
-			var bestY = 0;
-			for ( var dx = -1; dx <= 1; dx++ ) {
-				for ( var dy = -1; dy <= 1; dy++ ) {
-					if ( dx == 0 && dy == 0 ) {
-						continue;
-					}
-					var nx = cx + dx;
-					var ny = cy + dy;
-					if ( nx < 1 || ny < 1 || nx > width || ny > height ) {
-						continue;
-					}
-					var neighborDist = _fieldDistanceAt( arguments.field, nx, ny );
-					if ( neighborDist == -1 || neighborDist >= bestDist ) {
-						continue;
-					}
-					if (
-						dx != 0 && dy != 0 &&
-						( tiles[ cy ][ nx ] != "floor" || tiles[ ny ][ cx ] != "floor" )
-					) {
-						continue;
-					}
-					if ( occupied.keyExists( nx & "," & ny ) ) {
-						continue;
-					}
-					bestDist = neighborDist;
-					bestX = nx;
-					bestY = ny;
-				}
-			}
-			if ( bestX == 0 ) {
-				break;
-			}
-			arguments.mover.position = { "x": bestX, "y": bestY };
-			steps += 1;
-		}
-		return steps;
-	}
-
-	/**
-	 * Breadth-first search over `grid`'s walkable (8-directional) tiles from
-	 * `start` to the first tile satisfying `isGoal(x, y)`. Returns the path as
-	 * an array of `{x, y}` points including `start` and the goal tile, or an
-	 * empty array if no such tile is reachable. If `start` itself satisfies
-	 * `isGoal`, returns a single-element path (just `start`).
-	 *
-	 * @blocked Optional array of `{x, y}` tiles to treat as impassable, in
-	 *  addition to walls — other living combatants' positions, so two
-	 *  combatants never path onto the same square. A goal tile that's also
-	 *  blocked is simply skipped like any other blocked tile, same as it
-	 *  would be if it were a wall — moveToward()'s "adjacent to target" goal
-	 *  usually has several other candidate tiles to fall back to.
-	 */
-	private function _bfs( grid, start, isGoal, blocked = [] ) {
-		if ( arguments.isGoal( arguments.start.x, arguments.start.y ) ) {
-			return [ { "x": arguments.start.x, "y": arguments.start.y } ];
-		}
-
-		var blockedKeys = {};
-		for ( var blockedPos in arguments.blocked ) {
-			blockedKeys[ blockedPos.x & "," & blockedPos.y ] = true;
-		}
-
-		var visited = {};
-		visited[ arguments.start.x & "," & arguments.start.y ] = true;
-		var cameFrom = {};
-		var queue = [ { "x": arguments.start.x, "y": arguments.start.y } ];
-		var queueHead = 1;
-
-		while ( queueHead <= queue.len() ) {
-			var current = queue[ queueHead ];
-			queueHead += 1;
-
-			for ( var dx = -1; dx <= 1; dx++ ) {
-				for ( var dy = -1; dy <= 1; dy++ ) {
-					if ( dx == 0 && dy == 0 ) {
-						continue;
-					}
-					var nx = current.x + dx;
-					var ny = current.y + dy;
-					if ( !isWalkable( arguments.grid, nx, ny ) ) {
-						continue;
-					}
-					// No corner cutting: a diagonal step requires both flanking
-					// orthogonal tiles to be open, so nothing squeezes through
-					// the seam where two walls meet at a corner.
-					if (
-						dx != 0 && dy != 0 &&
-						( !isWalkable( arguments.grid, current.x + dx, current.y ) || !isWalkable( arguments.grid, current.x, current.y + dy ) )
-					) {
-						continue;
-					}
-					var key = nx & "," & ny;
-					if ( blockedKeys.keyExists( key ) ) {
-						continue;
-					}
-					if ( visited.keyExists( key ) ) {
-						continue;
-					}
-					visited[ key ] = true;
-					cameFrom[ key ] = current;
-
-					if ( arguments.isGoal( nx, ny ) ) {
-						var path = [];
-						var cursor = { "x": nx, "y": ny };
-						while ( !isNull( cursor ) ) {
-							arrayPrepend( path, cursor );
-							var cursorKey = cursor.x & "," & cursor.y;
-							cursor = cameFrom.keyExists( cursorKey ) ? cameFrom[ cursorKey ] : javaCast( "null", 0 );
-						}
-						return path;
-					}
-
-					arrayAppend( queue, { "x": nx, "y": ny } );
-				}
-			}
-		}
-
-		return [];
-	}
-
-	/**
-	 * Grid distance between two combatants, in 5-foot squares. Diagonal moves
-	 * cost the same as orthogonal ones per the "Playing on a Grid" rules, so
-	 * this is Chebyshev distance, not straight-line distance.
-	 */
-	function chebyshev( a, b ) {
-		return max( abs( arguments.a.position.x - arguments.b.position.x ), abs( arguments.a.position.y - arguments.b.position.y ) );
 	}
 
 	/**
@@ -1837,91 +1366,6 @@ class singleton {
 		}
 
 		return javaCast( "null", 0 );
-	}
-
-	/**
-	 * True if `to` is within MAX_SIGHT_SQUARES (60 feet, Chebyshev — matching
-	 * the game's grid distance) of `from` AND a straight line between them
-	 * doesn't pass through any wall tile along the way (the endpoints
-	 * themselves aren't checked, since they're the combatants' own occupied
-	 * tiles). Traces the line with
-	 * Bresenham's algorithm — the same one any grid-based line-of-sight check
-	 * uses — so it works regardless of which axis (or diagonal) the shot travels along.
-	 *
-	 * When the trace steps diagonally, the two orthogonal cells it cuts
-	 * between are checked too: if BOTH block sight (a corner-to-corner
-	 * "pinch", e.g. two rooms' walls meeting at a corner), sight is blocked.
-	 * Plain Bresenham skips those cells and let monsters see straight through
-	 * wall seams at every room corner. A single flanking wall doesn't block —
-	 * peeking past one corner is normal grid line-of-sight.
-	 *
-	 * Door tiles block sight too (see _blocksSight()) even though they're
-	 * walkable — a closed door reads as a solid barrier, so a monster behind
-	 * one stays dormant until someone actually steps through.
-	 *
-	 * @grid A level grid (`{width, height, tiles}` and, when coming from a
-	 *  real map rather than a bare test fixture, `decorations`), from MapService.
-	 */
-	function hasLineOfSight( grid, from, to ) {
-		var x = arguments.from.x;
-		var y = arguments.from.y;
-		var targetX = arguments.to.x;
-		var targetY = arguments.to.y;
-		if ( max( abs( targetX - x ), abs( targetY - y ) ) > MAX_SIGHT_SQUARES ) {
-			return false;
-		}
-		var dx = abs( targetX - x );
-		var dy = abs( targetY - y );
-		var stepX = ( x < targetX ) ? 1 : -1;
-		var stepY = ( y < targetY ) ? 1 : -1;
-		var err = dx - dy;
-
-		while ( !( x == targetX && y == targetY ) ) {
-			var doubledErr = 2 * err;
-			var movedX = false;
-			var movedY = false;
-			if ( doubledErr > -dy ) {
-				err -= dy;
-				x += stepX;
-				movedX = true;
-			}
-			if ( doubledErr < dx ) {
-				err += dx;
-				y += stepY;
-				movedY = true;
-			}
-			// Diagonal step: blocked by a corner pinch even when the landing
-			// cell itself is the target (the seam sits before it).
-			if (
-				movedX && movedY &&
-				_blocksSight( arguments.grid, x - stepX, y ) && _blocksSight( arguments.grid, x, y - stepY )
-			) {
-				return false;
-			}
-			if ( x == targetX && y == targetY ) {
-				break;
-			}
-			if ( _blocksSight( arguments.grid, x, y ) ) {
-				return false;
-			}
-		}
-		return true;
-	}
-
-	/**
-	 * True if the tile at (x, y) blocks line of sight: a wall (or anything
-	 * out of bounds), or a floor tile bearing a door decoration. Doors are
-	 * deliberately walkable (a combatant "opens" one by stepping through —
-	 * isWalkable()/movement never consult this) but read as closed solid
-	 * barriers, so nothing sees through one until it's actually crossed.
-	 * Tolerates grids without a decorations layer (the unit tests' bare
-	 * {width, height, tiles} fixtures).
-	 */
-	private function _blocksSight( grid, x, y ) {
-		if ( !isWalkable( arguments.grid, arguments.x, arguments.y ) ) {
-			return true;
-		}
-		return structKeyExists( arguments.grid, "decorations" ) && arguments.grid.decorations[ arguments.y ][ arguments.x ] == "door";
 	}
 
 	/**
