@@ -482,7 +482,7 @@ class singleton {
 		arguments.state.actionUsed = true;
 		arguments.state.roundHadAction = true;
 
-		var saveResult = variables.actions.rollSavingThrow( arguments.player, special.saveAbility, special.saveDC );
+		var saveResult = variables.actions.rollSavingThrow( combatant = arguments.player, ability = special.saveAbility, dc = special.saveDC, state = arguments.state );
 		var damage = variables.dice.rollSum( special.diceCount, special.diceSides ) + special.damageBonus;
 		if ( saveResult.success ) {
 			damage = int( damage / 2 );
@@ -490,7 +490,7 @@ class singleton {
 		damage = variables.actions.applyDamageModifiers( arguments.player, damage, special.damageType );
 
 		arguments.player.hitPoints = max( 0, arguments.player.hitPoints - damage );
-		variables.actions.checkConcentration( arguments.state.log, arguments.player, damage );
+		variables.actions.checkConcentration( arguments.state.log, arguments.player, damage, arguments.state );
 		arguments.state.log.prepend(
 			"#arguments.opponent.name# uses #special.name#! #arguments.player.name# rolls a DC #special.saveDC# #special.saveAbilityLabel# save: #saveResult.total# — " &
 			( saveResult.success ? "succeeds, takes half damage. " : "fails! " ) &
@@ -597,7 +597,7 @@ class singleton {
 	 */
 	private function _useLegendarySaveAttack( state, opponent, player, entry ) {
 		var dice = variables.dice.parseDice( arguments.entry.damageDice );
-		var saveResult = variables.actions.rollSavingThrow( arguments.player, arguments.entry.saveAbility, arguments.entry.saveDC );
+		var saveResult = variables.actions.rollSavingThrow( combatant = arguments.player, ability = arguments.entry.saveAbility, dc = arguments.entry.saveDC, state = arguments.state );
 		var damage = variables.dice.rollSum( dice.count, dice.sides ) + arguments.entry.damageBonus;
 		if ( saveResult.success ) {
 			damage = int( damage / 2 );
@@ -605,7 +605,7 @@ class singleton {
 		damage = variables.actions.applyDamageModifiers( arguments.player, damage, arguments.entry.damageType );
 
 		arguments.player.hitPoints = max( 0, arguments.player.hitPoints - damage );
-		variables.actions.checkConcentration( arguments.state.log, arguments.player, damage );
+		variables.actions.checkConcentration( arguments.state.log, arguments.player, damage, arguments.state );
 		arguments.state.log.prepend(
 			"#arguments.opponent.name# takes a legendary action: #arguments.entry.name#! #arguments.player.name# rolls a DC #arguments.entry.saveDC# #arguments.entry.saveAbilityLabel# save: #saveResult.total# — " &
 			( saveResult.success ? "succeeds, takes half damage. " : "fails! " ) &

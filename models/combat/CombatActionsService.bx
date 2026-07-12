@@ -806,7 +806,7 @@ class singleton {
 			if ( grazeDamage > 0 && !( structKeyExists( defender, "immunities" ) && arrayFindNoCase( defender.immunities, weapon.damageType ) ) ) {
 				defender.hitPoints = max( 0, defender.hitPoints - grazeDamage );
 				arguments.atk.log.prepend( "#attacker.name#'s Graze still grazes #defender.name# for #grazeDamage# #weapon.damageType# damage (#defender.hitPoints#/#defender.maxHitPoints# HP)." );
-				checkConcentration( arguments.atk.log, defender, grazeDamage );
+				checkConcentration( arguments.atk.log, defender, grazeDamage, arguments.atk.state );
 				recordThreat( defender, attacker, grazeDamage );
 			}
 		}
@@ -922,7 +922,7 @@ class singleton {
 		arguments.atk.damage = damage;
 
 		defender.hitPoints = max( 0, defender.hitPoints - damage );
-		checkConcentration( arguments.atk.log, defender, damage );
+		checkConcentration( arguments.atk.log, defender, damage, arguments.atk.state );
 		recordThreat( defender, attacker, damage );
 
 		arguments.atk.log.prepend(
@@ -954,7 +954,7 @@ class singleton {
 		}
 		if ( mastery == "Topple" ) {
 			var toppleDC = 8 + attacker.proficiencyBonus + _weaponAbilityMod( attacker, arguments.atk.weapon );
-			var toppleSave = rollSavingThrow( defender, "con", toppleDC );
+			var toppleSave = rollSavingThrow( combatant = defender, ability = "con", dc = toppleDC, state = arguments.atk.state );
 			if ( !toppleSave.success ) {
 				addCondition( defender, "Prone" );
 				arguments.atk.log.prepend( "#defender.name# fails a DC #toppleDC# Constitution save and topples Prone!" );
@@ -1040,7 +1040,7 @@ class singleton {
 			arguments.state.log.prepend(
 				"#arguments.attacker.name#'s Cleave also strikes #other.name# for #cleaveDamage# #arguments.weapon.damageType# damage (#other.hitPoints#/#other.maxHitPoints# HP)."
 			);
-			checkConcentration( arguments.state.log, other, cleaveDamage );
+			checkConcentration( arguments.state.log, other, cleaveDamage, arguments.state );
 			recordThreat( other, arguments.attacker, cleaveDamage );
 			checkDefenderDefeated( arguments.state, arguments.attacker, other, false );
 			return;
@@ -1205,6 +1205,41 @@ class singleton {
 	}
 
 	/**
+	 * Paladin's Aura of Protection (class_features: "Aura of Protection", level
+	 * 6): the highest Charisma modifier (minimum +1) among every conscious,
+	 * non-incapacitated Paladin within the aura — 2 squares (10 ft.), or 6
+	 * squares (30 ft.) once the Paladin also has "Aura Expansion" (level 18) —
+	 * of `target`, including the Paladin's own square (self-buff) and a downed
+	 * ally (who still needs the bonus on their death saves). Only ever applies
+	 * to a party member (`target` has a characterId) — monsters never benefit.
+	 * Multiple qualifying Paladins don't stack; only the best applies, per the
+	 * SRD ("a creature can benefit from only one Aura of Protection at a time").
+	 */
+	private function _auraOfProtectionBonus( state, target ) {
+		if ( !structKeyExists( arguments.target, "characterId" ) ) {
+			return 0;
+		}
+		var candidates = structKeyExists( arguments.state, "players" ) ? arguments.state.players
+			: ( structKeyExists( arguments.state, "player" ) ? [ arguments.state.player ] : [] );
+		var best = 0;
+		for ( var member in candidates ) {
+			if (
+				member.hitPoints <= 0 || isIncapacitated( member ) ||
+				!structKeyExists( member, "features" ) || arrayFindNoCase( member.features, "Aura of Protection" ) == 0
+			) {
+				continue;
+			}
+			var radiusSquares = ( arrayFindNoCase( member.features, "Aura Expansion" ) > 0 ) ? 6 : 2;
+			if ( variables.grid.chebyshev( member, arguments.target ) > radiusSquares ) {
+				continue;
+			}
+			var chaMod = structKeyExists( member, "modifiers" ) ? member.modifiers.cha : 0;
+			best = max( best, max( 1, chaMod ) );
+		}
+		return best;
+	}
+
+	/**
 	 * General d20-vs-DC saving throw: ability modifier plus Proficiency Bonus
 	 * if the combatant is proficient in that save. Grants Advantage for Fey
 	 * Ancestry (Elf) against the Charmed condition, for Gnomish Cunning (Gnome)
@@ -1212,7 +1247,9 @@ class singleton {
 	 * against any magical save, and for Rage on Strength saves. Grants
 	 * Disadvantage for Restrained specifically on Dexterity saves (Advantage
 	 * and Disadvantage cancel if both apply). Paralyzed/Petrified/Stunned/
-	 * Unconscious auto-fail any Strength or Dexterity save with no roll.
+	 * Unconscious auto-fail any Strength or Dexterity save with no roll. Adds
+	 * a nearby Paladin's Aura of Protection bonus, if any — see
+	 * _auraOfProtectionBonus().
 	 *
 	 * @combatant The saving combatant (has `abilityScores` and, ideally, `modifiers`/`proficiencyBonus`/`savingThrowProficiencies`).
 	 * @ability One of "str","dex","con","int","wis","cha".
@@ -1220,8 +1257,9 @@ class singleton {
 	 * @condition Optional: the condition being saved against (e.g. "Charmed"), for Fey Ancestry.
 	 * @isMagical Optional: whether this save is against a magical effect, for Gnomish Cunning and Magic Resistance.
 	 * @coverBonus Optional: Half/Three-Quarters Cover bonus added to a Dexterity save against an area effect.
+	 * @state Optional: the encounter's full mutable game state struct, for Aura of Protection lookup.
 	 */
-	function rollSavingThrow( combatant, ability, dc, condition = "", isMagical = false, coverBonus = 0 ) {
+	function rollSavingThrow( combatant, ability, dc, condition = "", isMagical = false, coverBonus = 0, state = {} ) {
 		// Paralyzed/Petrified/Stunned/Unconscious: automatically fails any
 		// Strength or Dexterity saving throw, no roll needed.
 		if ( listFindNoCase( "str,dex", arguments.ability ) && isHelpless( arguments.combatant ) ) {
@@ -1286,8 +1324,9 @@ class singleton {
 		// Cover (Half/Three-Quarters) also applies to Dexterity saves against
 		// area effects, per the "Cover" rules — this app only models Half Cover.
 		var coverAdjustment = ( arguments.ability == "dex" ) ? arguments.coverBonus : 0;
-		var total = roll + abilityMod + proficiencyBonus + coverAdjustment;
-		return { "roll": roll, "total": total, "success": ( total >= arguments.dc ), "hadAdvantage": useAdvantage, "hadDisadvantage": useDisadvantage };
+		var auraBonus = _auraOfProtectionBonus( arguments.state, arguments.combatant );
+		var total = roll + abilityMod + proficiencyBonus + coverAdjustment + auraBonus;
+		return { "roll": roll, "total": total, "success": ( total >= arguments.dc ), "hadAdvantage": useAdvantage, "hadDisadvantage": useDisadvantage, "auraBonus": auraBonus };
 	}
 
 	/**
@@ -1419,7 +1458,7 @@ class singleton {
 		}
 
 		defender.hitPoints = max( 0, defender.hitPoints - damage );
-		checkConcentration( arguments.state.log, defender, damage );
+		checkConcentration( arguments.state.log, defender, damage, arguments.state );
 		recordThreat( defender, attacker, damage );
 		arguments.state.log.prepend(
 			"#attacker.name# exhales a blast of fire! #defender.name# rolls a DC #dc# Dexterity save: #saveRoll# — " &
@@ -1496,7 +1535,7 @@ class singleton {
 	 * anything, or took no damage. Ends concentration (clearing
 	 * `concentratingOn` and logging it) on a failed save.
 	 */
-	function checkConcentration( log, combatant, damageTaken ) {
+	function checkConcentration( log, combatant, damageTaken, state = {} ) {
 		if (
 			!structKeyExists( arguments.combatant, "concentratingOn" ) || !len( arguments.combatant.concentratingOn ) ||
 			arguments.damageTaken <= 0
@@ -1504,7 +1543,7 @@ class singleton {
 			return;
 		}
 		var dc = max( 10, int( arguments.damageTaken / 2 ) );
-		var result = rollSavingThrow( arguments.combatant, "con", dc );
+		var result = rollSavingThrow( combatant = arguments.combatant, ability = "con", dc = dc, state = arguments.state );
 		if ( result.success ) {
 			arguments.log.prepend( "#arguments.combatant.name# maintains concentration on #arguments.combatant.concentratingOn# (DC #dc# Constitution save)." );
 		} else {
@@ -1725,7 +1764,7 @@ class singleton {
 		damage = applyDamageModifiers( arguments.defender, damage, arguments.damageType );
 
 		arguments.defender.hitPoints = max( 0, arguments.defender.hitPoints - damage );
-		checkConcentration( arguments.state.log, arguments.defender, damage );
+		checkConcentration( arguments.state.log, arguments.defender, damage, arguments.state );
 		recordThreat( arguments.defender, arguments.attacker, damage );
 		arguments.state.log.prepend(
 			"#arguments.attacker.name# casts #arguments.spellName##arguments.resourceNote# at #arguments.defender.name#: #roll# + #arguments.attacker.proficiencyBonus + spellMod# = #total# vs AC #effectiveAC##coverNote#. " &
@@ -1746,7 +1785,7 @@ class singleton {
 	private function _castSaveDamageSpell( state, attacker, defender, defenderIsPlayer, spellName, saveAbility, diceCount, diceSides, damageType, saveEffect = "half", resourceNote = "" ) {
 		var dc = 8 + arguments.attacker.proficiencyBonus + arguments.attacker.modifiers[ arguments.attacker.spellcastingAbility ];
 		var cover = coverBonus( arguments.state, arguments.attacker, arguments.defender );
-		var saveResult = rollSavingThrow( arguments.defender, arguments.saveAbility, dc, "", true, cover );
+		var saveResult = rollSavingThrow( arguments.defender, arguments.saveAbility, dc, "", true, cover, arguments.state );
 
 		var damage = variables.dice.rollSum( arguments.diceCount, arguments.diceSides );
 		var successText = "succeeds. No effect. ";
@@ -1759,7 +1798,7 @@ class singleton {
 		damage = applyDamageModifiers( arguments.defender, damage, arguments.damageType );
 
 		arguments.defender.hitPoints = max( 0, arguments.defender.hitPoints - damage );
-		checkConcentration( arguments.state.log, arguments.defender, damage );
+		checkConcentration( arguments.state.log, arguments.defender, damage, arguments.state );
 		recordThreat( arguments.defender, arguments.attacker, damage );
 		arguments.state.log.prepend(
 			"#arguments.attacker.name# casts #arguments.spellName##arguments.resourceNote# at #arguments.defender.name#: DC #dc# #uCase( arguments.saveAbility )# save — #arguments.defender.name# rolls #saveResult.total#" &
@@ -1780,7 +1819,7 @@ class singleton {
 		damage = applyDamageModifiers( arguments.defender, damage, "Force" );
 
 		arguments.defender.hitPoints = max( 0, arguments.defender.hitPoints - damage );
-		checkConcentration( arguments.state.log, arguments.defender, damage );
+		checkConcentration( arguments.state.log, arguments.defender, damage, arguments.state );
 		recordThreat( arguments.defender, arguments.attacker, damage );
 		arguments.state.log.prepend(
 			"#arguments.attacker.name# casts Magic Missile#arguments.resourceNote# — three darts automatically strike #arguments.defender.name# for #damage# Force damage (#arguments.defender.hitPoints#/#arguments.defender.maxHitPoints# HP)."
@@ -1954,17 +1993,24 @@ class singleton {
 			return;
 		}
 
+		// Aura of Protection adds a flat bonus to the death save total — it's a
+		// numerical modifier, not a change to the nat-1/nat-20 special rules
+		// above, which key off the raw die. See _auraOfProtectionBonus().
+		var auraBonus = _auraOfProtectionBonus( arguments.state, player );
+		var total = roll + auraBonus;
+		var auraNote = auraBonus > 0 ? " (+#auraBonus# Aura of Protection)" : "";
+
 		if ( roll == 1 ) {
 			player.deathSaveFailures += 2;
-		} else if ( roll >= 10 ) {
+		} else if ( total >= 10 ) {
 			player.deathSaveSuccesses += 1;
 		} else {
 			player.deathSaveFailures += 1;
 		}
 
 		arguments.state.log.prepend(
-			"#player.name# makes a death saving throw: #roll# — " &
-			( roll == 1 ? "critical failure (2 failures)!" : ( roll >= 10 ? "success." : "failure." ) ) &
+			"#player.name# makes a death saving throw: #roll##auraNote# — " &
+			( roll == 1 ? "critical failure (2 failures)!" : ( total >= 10 ? "success." : "failure." ) ) &
 			" (#min( player.deathSaveSuccesses, 3 )# successes, #min( player.deathSaveFailures, 3 )# failures)"
 		);
 

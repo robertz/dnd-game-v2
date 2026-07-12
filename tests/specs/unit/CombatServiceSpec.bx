@@ -982,6 +982,106 @@ class extends="testbox.system.BaseSpec" {
 				} );
 			} );
 
+			describe( "Aura of Protection (rollSavingThrow() / rollDeathSave())", () => {
+				function makeAllyState( players ){
+					return { "players": arguments.players, "player": arguments.players[ 1 ] };
+				}
+
+				it( "adds a nearby Paladin's Charisma modifier to an ally's saving throw", () => {
+					var paladin = makeCombatant( 1, 1, { "characterId": 1, "features": [ "Aura of Protection" ], "modifiers": { "cha": 3 } } );
+					var ally = makeCombatant( 2, 1, { "characterId": 2, "modifiers": { "wis": 0 }, "proficiencyBonus": 0 } );
+					var state = makeAllyState( [ paladin, ally ] );
+					var result = service.rollSavingThrow( ally, "wis", 10, "", false, 0, state );
+					expect( result.auraBonus ).toBe( 3 );
+				} );
+
+				it( "grants no bonus without a Paladin in range", () => {
+					var ally = makeCombatant( 2, 1, { "characterId": 2, "modifiers": { "wis": 0 }, "proficiencyBonus": 0 } );
+					var state = makeAllyState( [ ally ] );
+					var result = service.rollSavingThrow( ally, "wis", 10, "", false, 0, state );
+					expect( result.auraBonus ).toBe( 0 );
+				} );
+
+				it( "grants a minimum +1 even with a negative Charisma modifier", () => {
+					var paladin = makeCombatant( 1, 1, { "characterId": 1, "features": [ "Aura of Protection" ], "modifiers": { "cha": -2 } } );
+					var ally = makeCombatant( 2, 1, { "characterId": 2, "modifiers": { "wis": 0 }, "proficiencyBonus": 0 } );
+					var state = makeAllyState( [ paladin, ally ] );
+					var result = service.rollSavingThrow( ally, "wis", 10, "", false, 0, state );
+					expect( result.auraBonus ).toBe( 1 );
+				} );
+
+				it( "also applies to the Paladin's own saving throw (self-buff)", () => {
+					var paladin = makeCombatant( 1, 1, { "characterId": 1, "features": [ "Aura of Protection" ], "modifiers": { "cha": 2, "wis": 0 }, "proficiencyBonus": 0 } );
+					var state = makeAllyState( [ paladin ] );
+					var result = service.rollSavingThrow( paladin, "wis", 10, "", false, 0, state );
+					expect( result.auraBonus ).toBe( 2 );
+				} );
+
+				it( "takes the higher of two Paladins in range instead of stacking", () => {
+					var weaker = makeCombatant( 1, 1, { "characterId": 1, "features": [ "Aura of Protection" ], "modifiers": { "cha": 1 } } );
+					var stronger = makeCombatant( 1, 2, { "characterId": 2, "features": [ "Aura of Protection" ], "modifiers": { "cha": 4 } } );
+					var ally = makeCombatant( 2, 1, { "characterId": 3, "modifiers": { "wis": 0 }, "proficiencyBonus": 0 } );
+					var state = makeAllyState( [ weaker, stronger, ally ] );
+					var result = service.rollSavingThrow( ally, "wis", 10, "", false, 0, state );
+					expect( result.auraBonus ).toBe( 4 );
+				} );
+
+				it( "grants nothing beyond 2 squares (10 ft) until the Paladin also has Aura Expansion", () => {
+					var paladin = makeCombatant( 1, 1, { "characterId": 1, "features": [ "Aura of Protection" ], "modifiers": { "cha": 3 } } );
+					var farAlly = makeCombatant( 5, 1, { "characterId": 2, "modifiers": { "wis": 0 }, "proficiencyBonus": 0 } ); // 4 squares away
+					var state = makeAllyState( [ paladin, farAlly ] );
+					expect( service.rollSavingThrow( farAlly, "wis", 10, "", false, 0, state ).auraBonus ).toBe( 0 );
+
+					paladin.features.append( "Aura Expansion" );
+					expect( service.rollSavingThrow( farAlly, "wis", 10, "", false, 0, state ).auraBonus ).toBe( 3 );
+				} );
+
+				it( "grants nothing from a downed or incapacitated Paladin", () => {
+					var downed = makeCombatant( 1, 1, { "characterId": 1, "features": [ "Aura of Protection" ], "modifiers": { "cha": 3 }, "hitPoints": 0 } );
+					var ally = makeCombatant( 2, 1, { "characterId": 2, "modifiers": { "wis": 0 }, "proficiencyBonus": 0 } );
+					var downedState = makeAllyState( [ downed, ally ] );
+					expect( service.rollSavingThrow( ally, "wis", 10, "", false, 0, downedState ).auraBonus ).toBe( 0 );
+
+					var stunned = makeCombatant( 1, 1, { "characterId": 3, "features": [ "Aura of Protection" ], "modifiers": { "cha": 3 } } );
+					service.addCondition( stunned, "Stunned" );
+					var stunnedState = makeAllyState( [ stunned, ally ] );
+					expect( service.rollSavingThrow( ally, "wis", 10, "", false, 0, stunnedState ).auraBonus ).toBe( 0 );
+				} );
+
+				it( "never applies to a monster's saving throw", () => {
+					var paladin = makeCombatant( 1, 1, { "characterId": 1, "features": [ "Aura of Protection" ], "modifiers": { "cha": 3 } } );
+					var monster = makeCombatant( 2, 1, { "modifiers": { "wis": 0 }, "proficiencyBonus": 0 } ); // no characterId
+					var state = makeAllyState( [ paladin ] );
+					expect( service.rollSavingThrow( monster, "wis", 10, "", false, 0, state ).auraBonus ).toBe( 0 );
+				} );
+
+				it( "adds the aura bonus to a death saving throw's total, without changing the natural 20 revive or natural 1 critical failure", () => {
+					var paladin = makeCombatant( 1, 1, { "characterId": 1, "features": [ "Aura of Protection" ], "modifiers": { "cha": 20 } } );
+					var sawRegularSuccess = false;
+					for ( var attempt = 1; attempt <= 60; attempt++ ) {
+						var dyingPlayer = makeCombatant( 2, 1, {
+							"characterId": 2, "name": "Dying Hero", "hitPoints": 0, "maxHitPoints": 10,
+							"isDying": true, "deathSaveSuccesses": 0, "deathSaveFailures": 0
+						} );
+						var state = { "player": dyingPlayer, "players": [ paladin, dyingPlayer ], "activePlayerIndex": 2, "log": [], "gameOver": false, "outcome": "" };
+						service.rollDeathSave( state );
+						if ( dyingPlayer.hitPoints == 1 ) {
+							continue; // natural 20 revive — a separate, unaffected path
+						}
+						if ( state.log[ 1 ] contains "critical failure" ) {
+							// A natural 1 is always 2 failures, regardless of the +20 aura.
+							expect( dyingPlayer.deathSaveFailures ).toBe( 2 );
+							continue;
+						}
+						sawRegularSuccess = true;
+						// Any roll of 2-19 plus a +20 aura bonus always clears the DC 10 total.
+						expect( dyingPlayer.deathSaveSuccesses ).toBe( 1 );
+						expect( state.log[ 1 ] ).toInclude( "(+20 Aura of Protection)" );
+					}
+					expect( sawRegularSuccess ).toBeTrue();
+				} );
+			} );
+
 			describe( "Parry reaction (resolveAttack())", () => {
 				// AC 15 + parryBonus 5 vs attackBonus 0: rolls 15-19 land as a normal
 				// hit (roll >= 15) that adding the parry bonus (up to 20) always

@@ -149,7 +149,7 @@ class singleton {
 	function offHandWeapon( combatant ) { return variables.actions.offHandWeapon( argumentCollection = arguments ); }
 	function offHandAttack( state ) { return variables.actions.offHandAttack( argumentCollection = arguments ); }
 	function smiteAttack( state, slotLevel ) { return variables.actions.smiteAttack( argumentCollection = arguments ); }
-	function rollSavingThrow( combatant, ability, dc, condition = "", isMagical = false, coverBonus = 0 ) { return variables.actions.rollSavingThrow( argumentCollection = arguments ); }
+	function rollSavingThrow( combatant, ability, dc, condition = "", isMagical = false, coverBonus = 0, state = {} ) { return variables.actions.rollSavingThrow( argumentCollection = arguments ); }
 	function attemptGrapple( state, attacker, defender ) { return variables.actions.attemptGrapple( argumentCollection = arguments ); }
 	function attemptShove( state, attacker, defender ) { return variables.actions.attemptShove( argumentCollection = arguments ); }
 	function useBreathWeapon( state ) { return variables.actions.useBreathWeapon( argumentCollection = arguments ); }
