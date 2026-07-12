@@ -506,11 +506,11 @@ class singleton {
 	}
 
 	/**
-	 * Picks which living party member `opponent` should pursue/attack this
-	 * turn: among whichever members it currently perceives (line of sight,
-	 * or unconditionally if the encounter has no grid — same "aware from
-	 * the start" fallback the pre-aggro version of this AI used), whichever
-	 * has dealt it the most cumulative damage so far (see _recordThreat()),
+	 * Picks which party member `opponent` should pursue/attack this turn:
+	 * among whichever members it currently perceives (line of sight, or
+	 * unconditionally if the encounter has no grid — same "aware from the
+	 * start" fallback the pre-aggro version of this AI used), whichever has
+	 * dealt it the most cumulative damage so far (see _recordThreat()),
 	 * ties broken by proximity. If nothing is currently visible but the
 	 * opponent was already aware of the party, it keeps pursuing its
 	 * highest-threat *known* target rather than forgetting the party the
@@ -518,6 +518,14 @@ class singleton {
 	 * pre-aggro version used, just generalized from "the player" to "the
 	 * party." Returns null (opponent does nothing this turn) if it has
 	 * never perceived anyone.
+	 *
+	 * A downed (0 HP, dying) party member is still a valid candidate —
+	 * they can be finished off, same as the pre-party single-player
+	 * version of this AI always allowed (see _runOneOpponentTurn()'s own
+	 * isDying handling). Excluding them here instead would leave every
+	 * opponent with no target at all once the only member they'd perceived
+	 * went down, making them do nothing for the rest of the fight instead
+	 * of finishing the job or reassessing once someone else comes into view.
 	 *
 	 * @state The encounter's full mutable game state struct.
 	 * @opponent The opponent choosing a target.
@@ -528,12 +536,7 @@ class singleton {
 			arguments.opponent.aware = false;
 		}
 
-		var living = [];
-		for ( var member in arguments.state.players ) {
-			if ( member.hitPoints > 0 ) {
-				living.append( member );
-			}
-		}
+		var living = arguments.state.players;
 		if ( living.len() == 0 ) {
 			return javaCast( "null", 0 );
 		}
