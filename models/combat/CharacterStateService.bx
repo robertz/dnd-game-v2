@@ -1,0 +1,470 @@
+/**
+ * Character-state I/O for encounters: hydrating the in-combat player
+ * struct from the characters table (loadCharacter), persisting it back
+ * (saveCharacterState), and the Short/Long Rest recovery rules that
+ * read and write that state. Depends on RulesService and
+ * SpellcastingService. Stateless.
+ */
+class singleton {
+
+	function init( rules, spellcasting ) {
+		variables.rules        = arguments.rules;
+		variables.spellcasting = arguments.spellcasting;
+		return this;
+	}
+
+	SHORT_REST_SECONDS = 60 * 60;
+	LONG_REST_SECONDS = 8 * 60 * 60;
+	LONG_REST_COOLDOWN_SECONDS = 24 * 60 * 60;
+
+	/**
+	 * Persists current HP, spent hit dice, and spent spell slots to the DB so
+	 * they survive across encounter boundaries. Called after each combat ends
+	 * and after each hit die is spent during a short rest.
+	 */
+	function saveCharacterState( player ) {
+		var spentSlots = structKeyExists( arguments.player, "spentSpellSlots" ) ? arguments.player.spentSpellSlots : {};
+		queryExecute(
+			"UPDATE characters SET
+			     hit_points = :hp, hit_dice_spent = :hitDiceSpent, spent_spell_slots = :spentSlots,
+			     game_clock_seconds = :gameClockSeconds, last_long_rest_seconds = :lastLongRestSeconds,
+			     rages_used = :ragesUsed, used_second_wind = :usedSecondWind, used_breath_weapon = :usedBreathWeapon,
+			     used_relentless_endurance = :usedRelentlessEndurance, used_heroic_inspiration = :usedHeroicInspiration,
+			     used_magic_initiate_spell = :usedMagicInitiateSpell
+			 WHERE id = :characterId",
+			{
+				"hp":           arguments.player.hitPoints,
+				"hitDiceSpent": arguments.player.hitDiceSpent,
+				"spentSlots":   JSONSerialize( spentSlots ),
+				"gameClockSeconds": structKeyExists( arguments.player, "gameClockSeconds" ) ? arguments.player.gameClockSeconds : 0,
+				"lastLongRestSeconds": ( structKeyExists( arguments.player, "lastLongRestSeconds" ) && !isNull( arguments.player.lastLongRestSeconds ) )
+					? arguments.player.lastLongRestSeconds : javaCast( "null", 0 ),
+				"ragesUsed": structKeyExists( arguments.player, "ragesUsed" ) ? arguments.player.ragesUsed : 0,
+				"usedSecondWind": ( structKeyExists( arguments.player, "usedSecondWind" ) && arguments.player.usedSecondWind ) ? 1 : 0,
+				"usedBreathWeapon": ( structKeyExists( arguments.player, "usedBreathWeapon" ) && arguments.player.usedBreathWeapon ) ? 1 : 0,
+				"usedRelentlessEndurance": ( structKeyExists( arguments.player, "usedRelentlessEndurance" ) && arguments.player.usedRelentlessEndurance ) ? 1 : 0,
+				"usedHeroicInspiration": ( structKeyExists( arguments.player, "usedHeroicInspiration" ) && arguments.player.usedHeroicInspiration ) ? 1 : 0,
+				"usedMagicInitiateSpell": ( structKeyExists( arguments.player, "usedMagicInitiateSpell" ) && arguments.player.usedMagicInitiateSpell ) ? 1 : 0,
+				"characterId":  arguments.player.characterId
+			},
+			{ datasource: "gameserver" }
+		);
+	}
+
+	/**
+	 * Short Rest: a minimum 1-hour activity (advances the in-game clock by
+	 * SHORT_REST_SECONDS) during which the character can spend `diceCount`
+	 * Hit Dice (each d[hitDieSize] + CON mod, minimum 0 per die) to recover
+	 * HP — clamped to however many are actually left unspent. Also recovers
+	 * Second Wind and one Rage use, per those features' "regain ... when you
+	 * finish a Short Rest" text. `diceCount` can be 0 (rest without spending
+	 * any dice — still worth taking purely for the Second Wind/Rage
+	 * recovery). Returns `{ rolls, healing }` — `rolls` is one entry per die
+	 * actually spent, so the caller can log each roll.
+	 *
+	 * @player The player struct to rest (mutated in place).
+	 * @diceCount How many Hit Dice to spend as part of this rest (default 1).
+	 */
+	function shortRest( player, diceCount = 1 ) {
+		var spendable = min( max( 0, arguments.diceCount ), arguments.player.hitDiceMax - arguments.player.hitDiceSpent );
+		var rolls = [];
+		var healing = 0;
+		for ( var i = 1; i <= spendable; i++ ) {
+			var roll = randRange( 1, arguments.player.hitDieSize );
+			rolls.append( roll );
+			healing += max( 0, roll + arguments.player.modifiers.con );
+		}
+		arguments.player.hitDiceSpent = min( arguments.player.hitDiceMax, arguments.player.hitDiceSpent + spendable );
+		arguments.player.hitPoints = min( arguments.player.maxHitPoints, arguments.player.hitPoints + healing );
+
+		arguments.player.gameClockSeconds += SHORT_REST_SECONDS;
+		arguments.player.usedSecondWind = false;
+		if ( structKeyExists( arguments.player, "ragesUsed" ) && arguments.player.ragesUsed > 0 ) {
+			arguments.player.ragesUsed -= 1;
+		}
+		variables.rules.recomputeRagesRemaining( arguments.player );
+
+		// Warlocks recover all Pact Magic spell slots on a short rest.
+		var isWarlock = arguments.player.class == "Warlock";
+		if ( !isWarlock && structKeyExists( arguments.player, "classes" ) ) {
+			for ( var classEntry in arguments.player.classes ) {
+				if ( classEntry.className == "Warlock" ) {
+					isWarlock = true;
+					break;
+				}
+			}
+		}
+		if ( isWarlock ) {
+			arguments.player.spentSpellSlots = {};
+			variables.spellcasting.recomputeSpellSlots( arguments.player );
+		}
+
+		saveCharacterState( arguments.player );
+		return { "rolls": rolls, "healing": healing, "conMod": arguments.player.modifiers.con };
+	}
+
+	/**
+	 * How many more in-game hours (rounded up) until `player` is allowed
+	 * another Long Rest — 0 if one is allowed right now (including if
+	 * they've never taken one). Doesn't mutate anything; used both by
+	 * longRest() itself and by the UI to show/disable the Long Rest button
+	 * ahead of actually attempting it.
+	 */
+	function hoursUntilNextLongRest( player ) {
+		if ( isNull( arguments.player.lastLongRestSeconds ) ) {
+			return 0;
+		}
+		var elapsed = arguments.player.gameClockSeconds - arguments.player.lastLongRestSeconds;
+		if ( elapsed >= LONG_REST_COOLDOWN_SECONDS ) {
+			return 0;
+		}
+		return ceiling( ( LONG_REST_COOLDOWN_SECONDS - elapsed ) / 3600 );
+	}
+
+	/**
+	 * Long Rest: an 8-hour activity (advances the in-game clock by
+	 * LONG_REST_SECONDS) that fully restores HP, recovers up to half the
+	 * character's max hit dice (minimum 1), resets all spell slots, and
+	 * recovers every other Long-Rest-only resource (Rage uses, Breath
+	 * Weapon, Relentless Endurance, Heroic Inspiration, Magic Initiate's
+	 * bonus spell). Blocked — a no-op, per the "can't benefit from more than
+	 * one Long Rest in a 24-hour period" rule — if one was already completed
+	 * within the last LONG_REST_COOLDOWN_SECONDS of in-game time, unless
+	 * `ignoreCooldown` is true. Returns `{ success, hoursUntilNext }` so the
+	 * caller can show why it was refused; `hoursUntilNext` is 0 when
+	 * `success` is true.
+	 *
+	 * @player The player struct to rest (mutated in place).
+	 * @ignoreCooldown Bypasses the 24-hour gate — used only by
+	 *  default.bx's onMount() to fully heal a character who loaded at 0 HP
+	 *  (persisted from a defeat), so they're never left permanently stuck
+	 *  just because they happened to rest recently. Not exposed to the
+	 *  player-facing Rest panel, which always respects the real cooldown.
+	 */
+	function longRest( player, ignoreCooldown = false ) {
+		var hoursUntilNext = arguments.ignoreCooldown ? 0 : hoursUntilNextLongRest( arguments.player );
+		if ( hoursUntilNext > 0 ) {
+			return { "success": false, "hoursUntilNext": hoursUntilNext };
+		}
+
+		arguments.player.gameClockSeconds += LONG_REST_SECONDS;
+		arguments.player.lastLongRestSeconds = arguments.player.gameClockSeconds;
+
+		arguments.player.hitPoints    = arguments.player.maxHitPoints;
+		var recoverDice               = max( 1, int( arguments.player.hitDiceMax / 2 ) );
+		arguments.player.hitDiceSpent = max( 0, arguments.player.hitDiceSpent - recoverDice );
+		arguments.player.spentSpellSlots = {};
+		arguments.player.ragesUsed = 0;
+		arguments.player.usedSecondWind = false;
+		arguments.player.usedBreathWeapon = false;
+		arguments.player.usedRelentlessEndurance = false;
+		arguments.player.usedHeroicInspiration = false;
+		arguments.player.usedMagicInitiateSpell = false;
+		variables.spellcasting.assignSpellcasting( arguments.player );
+		variables.rules.recomputeRagesRemaining( arguments.player );
+		saveCharacterState( arguments.player );
+		return { "success": true, "hoursUntilNext": 0 };
+	}
+
+	/**
+	 * Loads a saved character (gameserver.characters) and assembles the
+	 * in-combat player struct from it: ability scores/modifiers, class-derived
+	 * fields (saving throws, fixed HP per level), gained class features, and
+	 * equipped inventory. `position` is intentionally left for the caller to
+	 * set — it's transient encounter state, not part of the saved character.
+	 *
+	 * @characterId The characters.id to load.
+	 */
+	function loadCharacter( characterId ) {
+		var rows = queryExecute(
+			"SELECT c.*, cl.name AS className, cl.hit_die, cl.saving_throw_proficiencies
+			 FROM characters c
+			 JOIN classes cl ON cl.id = c.class_id
+			 WHERE c.id = :characterId",
+			{ "characterId": arguments.characterId },
+			{ datasource: "gameserver" }
+		);
+		if ( rows.recordCount == 0 ) {
+			throw( type = "CharacterNotFound", message = "No saved character with id #arguments.characterId#." );
+		}
+		var row = rows;
+
+		var modifiers = {
+			"str": variables.rules.abilityModifier( row.str[ 1 ] ),
+			"dex": variables.rules.abilityModifier( row.dex[ 1 ] ),
+			"con": variables.rules.abilityModifier( row.con[ 1 ] ),
+			"int": variables.rules.abilityModifier( row.int_score[ 1 ] ),
+			"wis": variables.rules.abilityModifier( row.wis[ 1 ] ),
+			"cha": variables.rules.abilityModifier( row.cha[ 1 ] )
+		};
+
+		var species = row.species[ 1 ];
+		var speciesMechanics = variables.rules.resolveSpeciesMechanics( species );
+		var skillProficiencies = variables.rules.skillProficienciesFromTraits( speciesMechanics.traitNames, row.background[ 1 ] );
+		if ( len( row.chosen_skill_proficiencies[ 1 ] ) ) {
+			for ( var chosenSkill in listToArray( row.chosen_skill_proficiencies[ 1 ], "," ) ) {
+				if ( arrayFindNoCase( skillProficiencies, chosenSkill ) == 0 ) {
+					skillProficiencies.append( chosenSkill );
+				}
+			}
+		}
+
+		var player = {
+			"characterId": row.id[ 1 ],
+			"name": row.name[ 1 ],
+			"class": row.className[ 1 ],
+			"species": species,
+			"level": row.level[ 1 ],
+			"abilityScores": {
+				"str": row.str[ 1 ], "dex": row.dex[ 1 ], "con": row.con[ 1 ],
+				"int": row.int_score[ 1 ], "wis": row.wis[ 1 ], "cha": row.cha[ 1 ]
+			},
+			"modifiers": modifiers,
+			"proficiencyBonus": row.proficiency_bonus[ 1 ],
+			"armorClass": row.armor_class[ 1 ],
+			// Floored at 0, not 1 — every damage application already clamps to
+			// 0 (never negative), and default.bx's onMount() specifically
+			// checks for a true 0 here to auto-heal a character loaded after a
+			// defeat (defeat no longer offers an in-encounter rest option).
+			// Flooring to 1 would hide that signal and leave them stuck.
+			"hitPoints": max( 0, row.hit_points[ 1 ] ),
+			"maxHitPoints": row.max_hit_points[ 1 ],
+			"gold": row.gold[ 1 ],
+			// Die size (e.g. 8 for a d8) used when spending Hit Dice on a short rest.
+			"hitDieSize": int( reReplace( row.hit_die[ 1 ], "[^0-9]*(\d+).*", "\1" ) ),
+			"hitDiceMax": row.level[ 1 ],
+			"hitDiceSpent": row.hit_dice_spent[ 1 ],
+			"hitPointsPerLevel": variables.rules.fixedHitPointsPerLevel( row.hit_die[ 1 ] ),
+			// Dwarven Toughness (Hill Dwarf only): +1 Hit Point maximum per
+			// level, on top of the class's normal per-level gain.
+			"hpBonusPerLevel": arrayFindNoCase( speciesMechanics.traitNames, "Dwarven Toughness" ) > 0 ? 1 : 0,
+			"speed": row.speed[ 1 ],
+			"experiencePoints": row.experience_points[ 1 ],
+			// Lifetime counters, persisted directly as they happen (see
+			// _incrementCharacterStat()) rather than batched into
+			// saveCharacterState() — "monstersFought" is per-encounter (every
+			// opponent in the roster once combat starts), "monstersKilled" is
+			// per-kill, "deaths" increments each time this character has died.
+			"monstersFought": row.monsters_fought[ 1 ],
+			"monstersKilled": row.monsters_killed[ 1 ],
+			"deaths": row.deaths[ 1 ],
+			"savingThrowProficiencies": listToArray( row.saving_throw_proficiencies[ 1 ], " and ", false, true ),
+			// From background + species traits (see variables.rules.skillProficienciesFromTraits())
+			// — doesn't include a class's own skill choices, since there's no
+			// skill-picker step in character creation yet.
+			"skillProficiencies": skillProficiencies,
+			// Species mechanics (resistances plus the boolean hooks below) are
+			// derived from the `species`/`species_traits` tables by name, not
+			// hardcoded per species — see variables.rules.resolveSpeciesMechanics(). A subrace
+			// (e.g. "Hill Dwarf") inherits its parent race's traits too.
+			"resistances": speciesMechanics.resistances,
+			// Halfling Lucky: reroll a natural 1 on the d20 and use the new roll.
+			"hasLuck": arrayFindNoCase( speciesMechanics.traitNames, "Lucky" ) > 0,
+			// Half-Orc Relentless Endurance: drop to 1 HP instead of 0, once per
+			// Long Rest — persisted, not reset by a fresh encounter load.
+			"hasRelentlessEndurance": arrayFindNoCase( speciesMechanics.traitNames, "Relentless Endurance" ) > 0,
+			"usedRelentlessEndurance": row.used_relentless_endurance[ 1 ] == 1,
+			// Dragonborn Breath Weapon: once per Long Rest, an area blast the
+			// opponent can save against for half damage — persisted, not reset
+			// by a fresh encounter load.
+			"hasBreathWeapon": arrayFindNoCase( speciesMechanics.traitNames, "Breath Weapon" ) > 0,
+			"usedBreathWeapon": row.used_breath_weapon[ 1 ] == 1,
+			// Elf/Half-Elf Fey Ancestry: Advantage on saves vs. the Charmed
+			// condition, and immune to being put to sleep by magic. No current
+			// encounter content attempts to Charm or magically Sleep the
+			// player, so isImmuneToMagicalSleep is tracked but has nothing to
+			// interact with yet; the Advantage hook is real and exercised via
+			// rollSavingThrow().
+			"hasFeyAncestry": arrayFindNoCase( speciesMechanics.traitNames, "Fey Ancestry" ) > 0,
+			"isImmuneToMagicalSleep": arrayFindNoCase( speciesMechanics.traitNames, "Fey Ancestry" ) > 0,
+			// Gnome Cunning: Advantage on Intelligence/Wisdom/Charisma saves
+			// against magic. Same caveat as Fey Ancestry above.
+			"hasGnomishCunning": arrayFindNoCase( speciesMechanics.traitNames, "Gnome Cunning" ) > 0,
+			// Half-Orc Savage Attacks: on a critical hit with a melee weapon,
+			// roll one additional weapon damage die — distinct from the Savage
+			// Attacker feat's "roll damage twice, take the higher" (both can
+			// apply to the same attack). See resolveAttack()'s diceCount calc.
+			"hasSavageAttacks": arrayFindNoCase( speciesMechanics.traitNames, "Savage Attacks" ) > 0,
+			// Once-per-Long-Rest reroll of a missed attack — no species in the
+			// current dataset grants this (it was a 2024-ruleset Human trait),
+			// kept as a hook for any future species that does. Persisted, not
+			// reset by a fresh encounter load.
+			"hasHeroicInspiration": arrayFindNoCase( speciesMechanics.traitNames, "Heroic Inspiration" ) > 0,
+			"usedHeroicInspiration": row.used_heroic_inspiration[ 1 ] == 1,
+			// Second Wind (Fighter 1): a bonus action heal of 1d10 + Fighter
+			// level — see useSecondWind(). Recovers on a Short or Long Rest
+			// (shortRest()/longRest()), persisted across encounters.
+			"usedSecondWind": row.used_second_wind[ 1 ] == 1,
+			// Rage (Barbarian 1): see startRage()/endRage(). `ragesUsed` is the
+			// persisted truth (like spentSpellSlots); `ragesRemaining` is
+			// derived from it and the level-based max — see
+			// variables.rules.recomputeRagesRemaining(), called below once `level`/`features`
+			// are set. One use recovers on a Short Rest, all on a Long Rest.
+			"ragesUsed": row.rages_used[ 1 ],
+			// The in-game clock (see startNewRound()'s +6-sec-per-round tick,
+			// and shortRest()/longRest()'s hour-sized jumps), and the clock
+			// value as of the last completed Long Rest — null until the first
+			// one, so it never wrongly blocks that first rest on the 24-hour
+			// cooldown (see longRest()).
+			"gameClockSeconds": row.game_clock_seconds[ 1 ],
+			"lastLongRestSeconds": isNull( row.last_long_rest_seconds[ 1 ] ) ? javaCast( "null", 0 ) : row.last_long_rest_seconds[ 1 ],
+			// Magic Initiate's bonus spell recovers on a Long Rest only —
+			// persisted, not reset by a fresh encounter load (see
+			// variables.spellcasting.assignSpellcasting(), which no longer touches this field).
+			"usedMagicInitiateSpell": row.used_magic_initiate_spell[ 1 ] == 1,
+			"isRaging": false,
+			"features": [],
+			"feats": [],
+			"inventory": [],
+			// The player's known cantrips/leveled spells, if any (see
+			// variables.spellcasting.assignSpellcasting()) — empty for a non-caster, or any
+			// character created before this feature existed.
+			"knownCantripNames": len( row.known_cantrips[ 1 ] ) ? listToArray( row.known_cantrips[ 1 ] ) : [],
+			"knownSpellNames": len( row.known_spells[ 1 ] ) ? listToArray( row.known_spells[ 1 ] ) : []
+		};
+
+		// Multiclassing (see startMulticlass()/setNextLevelClass()):
+		// `player.classes` always has at least one entry (the original
+		// class); `player.level`/`player.hitDieSize` above stay scoped to
+		// that original class specifically (used for its own hit-die rolls
+		// and feature grants), while `player.totalLevel` is the sum across
+		// every class — what proficiency bonus, XP thresholds, and combined
+		// spell slots actually key off. A single-class character (the
+		// overwhelming default) just gets a one-entry `classes` array and
+		// `totalLevel == level`, unchanged from before this feature existed.
+		player.classes = [ {
+			"classId": row.class_id[ 1 ], "className": row.className[ 1 ],
+			"subclassId": isNull( row.subclass_id[ 1 ] ) ? javaCast( "null", 0 ) : row.subclass_id[ 1 ],
+			"level": row.level[ 1 ], "hitDie": row.hit_die[ 1 ]
+		} ];
+		player.totalLevel = row.level[ 1 ];
+		var multiclassRows = queryExecute(
+			"SELECT cml.class_id, cml.subclass_id, cml.level, cl.name AS className, cl.hit_die
+			 FROM character_multiclass_levels cml JOIN classes cl ON cl.id = cml.class_id
+			 WHERE cml.character_id = :characterId",
+			{ "characterId": arguments.characterId },
+			{ datasource: "gameserver" }
+		);
+		for ( var mcRow in multiclassRows ) {
+			arrayAppend( player.classes, {
+				"classId": mcRow.class_id, "className": mcRow.className,
+				"subclassId": isNull( mcRow.subclass_id ) ? javaCast( "null", 0 ) : mcRow.subclass_id,
+				"level": mcRow.level, "hitDie": mcRow.hit_die
+			} );
+			player.totalLevel += mcRow.level;
+		}
+		// Which class the next automatic level-up applies to (see
+		// _levelUp()) — defaults to the original class until the player
+		// multiclasses and/or redirects it via setNextLevelClass().
+		player.nextLevelClassId = isNull( row.next_level_class_id[ 1 ] ) ? row.class_id[ 1 ] : row.next_level_class_id[ 1 ];
+
+		var featureRows = queryExecute(
+			"SELECT cf.name FROM character_features chf
+			 JOIN class_features cf ON cf.id = chf.class_feature_id
+			 WHERE chf.character_id = :characterId
+			 ORDER BY cf.level, cf.sort_order",
+			{ "characterId": arguments.characterId },
+			{ datasource: "gameserver" }
+		);
+		for ( var featureRow in featureRows ) {
+			arrayAppend( player.features, featureRow.name );
+		}
+
+		var featRows = queryExecute(
+			"SELECT f.name FROM character_feats chf
+			 JOIN feats f ON f.id = chf.feat_id
+			 WHERE chf.character_id = :characterId",
+			{ "characterId": arguments.characterId },
+			{ datasource: "gameserver" }
+		);
+		for ( var featRow in featRows ) {
+			arrayAppend( player.feats, featRow.name );
+		}
+		// Savage Attacker: once per turn (satisfied automatically here, since
+		// this app only allows one attack per turn), roll damage dice twice
+		// and use the higher result.
+		player.hasSavageAttacker = arrayFindNoCase( player.feats, "Savage Attacker" ) > 0;
+		// Grappler: Advantage on attacks against a creature grappled by you.
+		player.hasGrapplerFeat = arrayFindNoCase( player.feats, "Grappler" ) > 0;
+		// Magic Initiate: a simple attack cantrip usable in place of a weapon attack.
+		player.hasMagicInitiate = arrayFindNoCase( player.feats, "Magic Initiate" ) > 0;
+		// Defense fighting style: +1 Armor Class, but only while wearing
+		// Light, Medium, or Heavy body armor — not unarmored, and not from
+		// a shield alone (see _recalculateArmorClass()'s own armor_type
+		// != 'shield' distinction for the same body-armor-vs-shield split).
+		if ( arrayFindNoCase( player.feats, "Defense" ) > 0 ) {
+			var wornBodyArmor = queryExecute(
+				"SELECT 1 AS found FROM character_armor ca
+				 JOIN armors a ON a.id = ca.armor_id
+				 WHERE ca.character_id = :characterId AND ca.equipped = 1 AND a.armor_type != 'shield'",
+				{ "characterId": arguments.characterId },
+				{ datasource: "gameserver" }
+			);
+			if ( wornBodyArmor.recordCount > 0 ) {
+				player.armorClass += 1;
+			}
+		}
+
+		// Rage (Barbarian 1): derives ragesRemaining from the persisted
+		// ragesUsed and the level-based max — 0 for a non-Barbarian.
+		variables.rules.recomputeRagesRemaining( player );
+		// Expertise (Rogue 1, Bard 2, Ranger 9): the player-chosen skills (from
+		// among their existing proficiencies) that get doubled Proficiency
+		// Bonus — see pendingExpertiseChoice()/chooseExpertise(), never
+		// auto-assigned.
+		player.expertiseSkills = len( row.expertise_skills[ 1 ] ) ? listToArray( row.expertise_skills[ 1 ] ) : [];
+
+		var spentSlotsRaw = row.spent_spell_slots[ 1 ];
+		player.spentSpellSlots = ( len( trim( spentSlotsRaw ) ) && trim( spentSlotsRaw ) != "{}" )
+			? JSONDeserialize( spentSlotsRaw )
+			: {};
+
+		variables.spellcasting.assignSpellcasting( player );
+
+		var inventoryRows = queryExecute(
+			"SELECT ci.id, ci.weapon_id, ci.category, ci.equipped, ci.quantity, ci.attack_bonus, ci.damage_bonus,
+			        w.name, w.damage_dice, w.damage_type, w.properties, w.mastery
+			 FROM character_inventory ci
+			 JOIN weapons w ON w.id = ci.weapon_id
+			 WHERE ci.character_id = :characterId",
+			{ "characterId": arguments.characterId },
+			{ datasource: "gameserver" }
+		);
+		for ( var invRow in inventoryRows ) {
+			var item = {
+				// Maps this item back to its database rows.
+				"id": invRow.id,
+				"weaponId": invRow.weapon_id,
+				"name": invRow.name,
+				"category": invRow.category,
+				"damageDice": invRow.damage_dice,
+				"damageType": invRow.damage_type,
+				// Property text is comma-space delimited ("Finesse, Light"); a
+				// plain listToArray() would leave a leading space on every
+				// entry but the first (" Light"), silently breaking every
+				// arrayFindNoCase() property check (Two-Handed, Versatile, Light).
+				"properties": arrayMap( listToArray( invRow.properties ), ( p ) => trim( p ) ),
+				"attackBonus": invRow.attack_bonus,
+				"damageBonus": invRow.damage_bonus,
+				"equipped": invRow.equipped,
+				"quantity": invRow.quantity,
+				// Weapon Mastery property (Cleave/Graze/Nick/Push/Sap/Slow/Topple/
+				// Vex — see resolveAttack()'s "Weapon Mastery" section), only
+				// actually usable by a combatant with the Weapon Mastery class
+				// feature (Barbarian/Fighter/Paladin/Ranger/Rogue at level 1).
+				"mastery": isNull( invRow.mastery ) ? "" : invRow.mastery
+			};
+			if ( item.category == "ranged" ) {
+				var range = variables.rules.parseWeaponRange( invRow.properties );
+				if ( !isNull( range ) ) {
+					item.normalRange = range.normal;
+					item.longRange = range.long;
+				}
+			}
+			arrayAppend( player.inventory, item );
+		}
+
+		return player;
+	}
+
+}
