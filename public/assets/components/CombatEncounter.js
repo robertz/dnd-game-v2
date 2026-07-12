@@ -170,14 +170,14 @@ const CombatEncounter = {
 											<button v-for="cantrip in cs.player.knownCantrips" :key="cantrip.name"
 												type="button" class="btn btn-attack"
 												:title="describeSpell(cantrip)"
-												@click="ws('cast_cantrip',{spellName:cantrip.name})">Cast {{ cantrip.name }}</button>
+												@click="ws('cast_cantrip',{spellName:cantrip.name})">Cast {{ cantrip.name }} (Cantrip)</button>
 										</template>
 										<template v-if="cs.player.knownLeveledSpells">
 											<button v-for="spell in cs.player.knownLeveledSpells" :key="spell.name"
 												type="button" class="btn btn-attack"
 												:disabled="!hasSpellResource(spell.level)"
 												:title="describeSpell(spell)"
-												@click="castLeveledSpell(spell)">Cast {{ spell.name }}{{ spell.type === 'heal' && partyMembers.length > 1 ? ' on ' + healTargetName : '' }}</button>
+												@click="castLeveledSpell(spell)">Cast {{ spell.name }} (Lv {{ spell.level }}){{ spell.type === 'heal' && partyMembers.length > 1 ? ' on ' + healTargetName : '' }}</button>
 										</template>
 									</template>
 								</div>
