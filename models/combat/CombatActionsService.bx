@@ -582,13 +582,44 @@ class singleton {
 	 * @disadvantage Whether this attack roll has Disadvantage.
 	 */
 	function resolveAttack( log, attacker, defender, weapon, disadvantage = false, advantage = false, omitDamageBonus = false, coverBonus = 0, state = {} ) {
+		// One attack flows through the stages below as a single mutable `atk`
+		// struct (the same in-place convention the encounter `state` uses):
+		// advantage state -> to-hit roll -> on a hit, damage roll -> damage
+		// application -> Weapon Mastery riders. Each stage reads what earlier
+		// stages recorded on `atk`.
+		var atk = {
+			"log": arguments.log, "attacker": arguments.attacker, "defender": arguments.defender,
+			"weapon": arguments.weapon, "disadvantage": arguments.disadvantage, "advantage": arguments.advantage,
+			"omitDamageBonus": arguments.omitDamageBonus, "coverBonus": arguments.coverBonus, "state": arguments.state
+		};
+		_resolveAdvantageState( atk );
+		_rollToHit( atk );
+		if ( !atk.hits ) {
+			_logMissAndGraze( atk );
+			return;
+		}
+		_rollDamage( atk );
+		_applyDamage( atk );
+		_applyMasteryRiders( atk );
+	}
+
+	/**
+	 * Stage 1 — net Advantage/Disadvantage for this attack: caller-requested
+	 * flags plus every automatic source (Grappler feat vs. a grappled target,
+	 * attacker/defender conditions, Weapon Mastery Vex/Sap carry-over flags,
+	 * which are consumed here whether or not they end up mattering).
+	 * Advantage and Disadvantage on the same roll cancel out, per the rules.
+	 */
+	private function _resolveAdvantageState( atk ) {
+		var attacker = arguments.atk.attacker;
+		var defender = arguments.atk.defender;
 		// Grappler: attacks against a creature you've grappled have Advantage,
 		// even if the caller didn't ask for it explicitly.
 		var autoAdvantage = (
-			structKeyExists( arguments.defender, "grappledBy" ) &&
-			arguments.defender.grappledBy == arguments.attacker.name &&
-			structKeyExists( arguments.attacker, "hasGrapplerFeat" ) &&
-			arguments.attacker.hasGrapplerFeat
+			structKeyExists( defender, "grappledBy" ) &&
+			defender.grappledBy == attacker.name &&
+			structKeyExists( attacker, "hasGrapplerFeat" ) &&
+			attacker.hasGrapplerFeat
 		);
 		// Prone: melee attacks against a Prone target have Advantage, ranged
 		// ones have Disadvantage. Restrained: attacks against a Restrained
@@ -599,16 +630,16 @@ class singleton {
 		// Blinded: your own attacks have Disadvantage. Invisible: your own
 		// attacks have Advantage (the mirror image of Blinded).
 		var autoDisadvantage = (
-			hasCondition( arguments.attacker, "Restrained" ) ||
-			hasCondition( arguments.attacker, "Poisoned" ) ||
-			hasCondition( arguments.attacker, "Frightened" ) ||
-			hasCondition( arguments.attacker, "Blinded" )
+			hasCondition( attacker, "Restrained" ) ||
+			hasCondition( attacker, "Poisoned" ) ||
+			hasCondition( attacker, "Frightened" ) ||
+			hasCondition( attacker, "Blinded" )
 		);
-		if ( hasCondition( arguments.attacker, "Invisible" ) ) {
+		if ( hasCondition( attacker, "Invisible" ) ) {
 			autoAdvantage = true;
 		}
-		if ( hasCondition( arguments.defender, "Prone" ) ) {
-			if ( arguments.weapon.category == "melee" ) {
+		if ( hasCondition( defender, "Prone" ) ) {
+			if ( arguments.atk.weapon.category == "melee" ) {
 				autoAdvantage = true;
 			} else {
 				autoDisadvantage = true;
@@ -619,53 +650,64 @@ class singleton {
 		// defender Advantage. Invisible is the opposite: attacks against an
 		// Invisible defender have Disadvantage.
 		if (
-			hasCondition( arguments.defender, "Restrained" ) ||
-			hasCondition( arguments.defender, "Blinded" ) ||
-			isHelpless( arguments.defender )
+			hasCondition( defender, "Restrained" ) ||
+			hasCondition( defender, "Blinded" ) ||
+			isHelpless( defender )
 		) {
 			autoAdvantage = true;
 		}
-		if ( hasCondition( arguments.defender, "Invisible" ) ) {
+		if ( hasCondition( defender, "Invisible" ) ) {
 			autoDisadvantage = true;
 		}
 		// Weapon Mastery — Vex: a prior hit against this same target with a
 		// Vex weapon grants Advantage on this attack (consumed either way).
-		var usedVex = (
-			structKeyExists( arguments.attacker, "vexAdvantageTarget" ) && len( arguments.attacker.vexAdvantageTarget ) &&
-			arguments.attacker.vexAdvantageTarget == arguments.defender.name
-		);
-		if ( usedVex ) {
+		if (
+			structKeyExists( attacker, "vexAdvantageTarget" ) && len( attacker.vexAdvantageTarget ) &&
+			attacker.vexAdvantageTarget == defender.name
+		) {
 			autoAdvantage = true;
-			arguments.attacker.vexAdvantageTarget = "";
+			attacker.vexAdvantageTarget = "";
 		}
 		// Weapon Mastery — Sap: a prior hit against the attacker with a Sap
 		// weapon gives Disadvantage on this attack (consumed either way).
-		var usedSap = structKeyExists( arguments.attacker, "sapped" ) && arguments.attacker.sapped;
-		if ( usedSap ) {
+		if ( structKeyExists( attacker, "sapped" ) && attacker.sapped ) {
 			autoDisadvantage = true;
-			arguments.attacker.sapped = false;
+			attacker.sapped = false;
 		}
-		// Advantage and Disadvantage on the same roll cancel out, per the rules.
-		var useAdvantage = ( arguments.advantage || autoAdvantage ) && !( arguments.disadvantage || autoDisadvantage );
-		var useDisadvantage = ( arguments.disadvantage || autoDisadvantage ) && !( arguments.advantage || autoAdvantage );
+		arguments.atk.useAdvantage    = ( arguments.atk.advantage || autoAdvantage ) && !( arguments.atk.disadvantage || autoDisadvantage );
+		arguments.atk.useDisadvantage = ( arguments.atk.disadvantage || autoDisadvantage ) && !( arguments.atk.advantage || autoAdvantage );
+	}
+
+	/**
+	 * Stage 2 — the d20: Advantage/Disadvantage pair, Halfling Luck reroll on
+	 * a natural 1, Archery style bonus, cover-adjusted AC, crit/fumble,
+	 * Heroic Inspiration reroll on a miss, auto-crit against a Paralyzed/
+	 * Unconscious melee target, and the defender's Parry reaction. Records
+	 * everything later stages and both log lines need (roll/total/notes/
+	 * mastery/actionPhrase) on `atk`.
+	 */
+	private function _rollToHit( atk ) {
+		var attacker = arguments.atk.attacker;
+		var defender = arguments.atk.defender;
+		var weapon   = arguments.atk.weapon;
 
 		var roll = randRange( 1, 20 );
-		if ( useAdvantage ) {
+		if ( arguments.atk.useAdvantage ) {
 			roll = max( roll, randRange( 1, 20 ) );
-		} else if ( useDisadvantage ) {
+		} else if ( arguments.atk.useDisadvantage ) {
 			roll = min( roll, randRange( 1, 20 ) );
 		}
 		// Halfling Luck: a natural 1 can be rerolled, and the new roll must be used.
 		var usedLuck = false;
-		if ( roll == 1 && structKeyExists( arguments.attacker, "hasLuck" ) && arguments.attacker.hasLuck ) {
+		if ( roll == 1 && structKeyExists( attacker, "hasLuck" ) && attacker.hasLuck ) {
 			roll = randRange( 1, 20 );
 			usedLuck = true;
 		}
 		// Archery fighting style: +2 to attack rolls with Ranged weapons.
-		var hasArchery = structKeyExists( arguments.attacker, "feats" ) && arrayFindNoCase( arguments.attacker.feats, "Archery" ) > 0;
-		var styleBonus = ( hasArchery && arguments.weapon.category == "ranged" ) ? 2 : 0;
-		var effectiveAC = arguments.defender.armorClass + arguments.coverBonus;
-		var total = roll + arguments.weapon.attackBonus + styleBonus;
+		var hasArchery = structKeyExists( attacker, "feats" ) && arrayFindNoCase( attacker.feats, "Archery" ) > 0;
+		var styleBonus = ( hasArchery && weapon.category == "ranged" ) ? 2 : 0;
+		var effectiveAC = defender.armorClass + arguments.atk.coverBonus;
+		var total = roll + weapon.attackBonus + styleBonus;
 		var isCrit = ( roll == 20 );
 		var isFumble = ( roll == 1 );
 		var hits = !isFumble && ( isCrit || total >= effectiveAC );
@@ -673,13 +715,13 @@ class singleton {
 		// Human Heroic Inspiration: once per encounter, reroll a missed attack.
 		var usedInspiration = false;
 		if (
-			!hits && structKeyExists( arguments.attacker, "hasHeroicInspiration" ) &&
-			arguments.attacker.hasHeroicInspiration && !arguments.attacker.usedHeroicInspiration
+			!hits && structKeyExists( attacker, "hasHeroicInspiration" ) &&
+			attacker.hasHeroicInspiration && !attacker.usedHeroicInspiration
 		) {
-			arguments.attacker.usedHeroicInspiration = true;
+			attacker.usedHeroicInspiration = true;
 			usedInspiration = true;
 			roll = randRange( 1, 20 );
-			total = roll + arguments.weapon.attackBonus + styleBonus;
+			total = roll + weapon.attackBonus + styleBonus;
 			isCrit = ( roll == 20 );
 			isFumble = ( roll == 1 );
 			hits = !isFumble && ( isCrit || total >= effectiveAC );
@@ -690,8 +732,8 @@ class singleton {
 		// attack", since this app doesn't model reach weapons, so melee
 		// already implies adjacency.
 		if (
-			hits && !isCrit && structKeyExists( arguments.weapon, "category" ) && arguments.weapon.category == "melee" &&
-			( hasCondition( arguments.defender, "Paralyzed" ) || hasCondition( arguments.defender, "Unconscious" ) )
+			hits && !isCrit && structKeyExists( weapon, "category" ) && weapon.category == "melee" &&
+			( hasCondition( defender, "Paralyzed" ) || hasCondition( defender, "Unconscious" ) )
 		) {
 			isCrit = true;
 		}
@@ -705,12 +747,12 @@ class singleton {
 		var usedParry = false;
 		if (
 			hits && !isCrit &&
-			structKeyExists( arguments.weapon, "category" ) && arguments.weapon.category == "melee" &&
-			structKeyExists( arguments.defender, "parryBonus" ) && arguments.defender.parryBonus > 0 &&
-			!( structKeyExists( arguments.defender, "reactionUsed" ) && arguments.defender.reactionUsed ) &&
-			total < effectiveAC + arguments.defender.parryBonus
+			structKeyExists( weapon, "category" ) && weapon.category == "melee" &&
+			structKeyExists( defender, "parryBonus" ) && defender.parryBonus > 0 &&
+			!( structKeyExists( defender, "reactionUsed" ) && defender.reactionUsed ) &&
+			total < effectiveAC + defender.parryBonus
 		) {
-			arguments.defender.reactionUsed = true;
+			defender.reactionUsed = true;
 			usedParry = true;
 			hits = false;
 		}
@@ -720,78 +762,101 @@ class singleton {
 		// one of the 8 mastery properties (weapons.mastery — see
 		// loadCharacter()'s inventory query).
 		var hasWeaponMastery = (
-			structKeyExists( arguments.attacker, "features" ) && arrayFindNoCase( arguments.attacker.features, "Weapon Mastery" ) > 0 &&
-			structKeyExists( arguments.weapon, "mastery" ) && len( arguments.weapon.mastery )
+			structKeyExists( attacker, "features" ) && arrayFindNoCase( attacker.features, "Weapon Mastery" ) > 0 &&
+			structKeyExists( weapon, "mastery" ) && len( weapon.mastery )
 		);
-		var mastery = hasWeaponMastery ? arguments.weapon.mastery : "";
 
-		var disadvantageNote = useDisadvantage ? " (Disadvantage)" : ( useAdvantage ? " (Advantage)" : "" );
-		var luckNote = usedLuck ? " (Lucky reroll)" : "";
-		var styleNote = ( styleBonus > 0 ) ? " (Archery)" : "";
-		var inspirationNote = usedInspiration ? " (Heroic Inspiration reroll)" : "";
-		var coverNote = ( arguments.coverBonus > 0 ) ? " (+#arguments.coverBonus# Cover)" : "";
-		var parryNote = usedParry ? " (Parried!)" : "";
+		arguments.atk.roll        = roll;
+		arguments.atk.total       = total;
+		arguments.atk.styleBonus  = styleBonus;
+		arguments.atk.effectiveAC = effectiveAC;
+		arguments.atk.isCrit      = isCrit;
+		arguments.atk.hits        = hits;
+		arguments.atk.mastery     = hasWeaponMastery ? weapon.mastery : "";
+		arguments.atk.notes = "#arguments.atk.coverBonus > 0 ? ' (+' & arguments.atk.coverBonus & ' Cover)' : ''#" &
+			"#arguments.atk.useDisadvantage ? ' (Disadvantage)' : ( arguments.atk.useAdvantage ? ' (Advantage)' : '' )#" &
+			"#usedLuck ? ' (Lucky reroll)' : ''#" &
+			"#styleBonus > 0 ? ' (Archery)' : ''#" &
+			"#usedInspiration ? ' (Heroic Inspiration reroll)' : ''#";
+		arguments.atk.parryNote = usedParry ? " (Parried!)" : "";
 		// A monster's ranged attack drawn from a Spellcasting/Innate
 		// Spellcasting trait (see _buildMonsterStruct()'s isSpell flagging)
 		// reads as a cast, not a mundane weapon swing — cosmetic only, the
 		// attack roll/damage math underneath is unchanged.
-		var actionPhrase = ( structKeyExists( arguments.weapon, "isSpell" ) && arguments.weapon.isSpell )
-			? "#arguments.attacker.name# casts #arguments.weapon.name# at #arguments.defender.name#"
-			: "#arguments.attacker.name# attacks #arguments.defender.name# with #arguments.weapon.name#";
+		arguments.atk.actionPhrase = ( structKeyExists( weapon, "isSpell" ) && weapon.isSpell )
+			? "#attacker.name# casts #weapon.name# at #defender.name#"
+			: "#attacker.name# attacks #defender.name# with #weapon.name#";
+	}
 
-		if ( !hits ) {
-			arguments.log.prepend(
-				"#actionPhrase#: #roll# + #arguments.weapon.attackBonus + styleBonus# = #total# vs AC #effectiveAC##coverNote##disadvantageNote##luckNote##styleNote##inspirationNote##parryNote#. Miss!"
-			);
-			// Weapon Mastery — Graze: a miss still deals damage equal to the
-			// ability modifier used for the attack (not further modified by
-			// resistance/vulnerability nuance beyond immunity, to keep this a
-			// flat chip of damage as intended).
-			if ( mastery == "Graze" ) {
-				var grazeDamage = max( 0, _weaponAbilityMod( arguments.attacker, arguments.weapon ) );
-				if ( grazeDamage > 0 && !( structKeyExists( arguments.defender, "immunities" ) && arrayFindNoCase( arguments.defender.immunities, arguments.weapon.damageType ) ) ) {
-					arguments.defender.hitPoints = max( 0, arguments.defender.hitPoints - grazeDamage );
-					arguments.log.prepend( "#arguments.attacker.name#'s Graze still grazes #arguments.defender.name# for #grazeDamage# #arguments.weapon.damageType# damage (#arguments.defender.hitPoints#/#arguments.defender.maxHitPoints# HP)." );
-					checkConcentration( arguments.log, arguments.defender, grazeDamage );
-					recordThreat( arguments.defender, arguments.attacker, grazeDamage );
-				}
+	/**
+	 * Miss handling — logs the miss and applies Weapon Mastery Graze, which
+	 * still deals the attack's raw ability modifier as damage on a miss (not
+	 * further modified by resistance/vulnerability nuance beyond immunity,
+	 * to keep it the flat chip of damage it's meant to be).
+	 */
+	private function _logMissAndGraze( atk ) {
+		var attacker = arguments.atk.attacker;
+		var defender = arguments.atk.defender;
+		var weapon   = arguments.atk.weapon;
+		arguments.atk.log.prepend(
+			"#arguments.atk.actionPhrase#: #arguments.atk.roll# + #weapon.attackBonus + arguments.atk.styleBonus# = #arguments.atk.total# vs AC #arguments.atk.effectiveAC##arguments.atk.notes##arguments.atk.parryNote#. Miss!"
+		);
+		if ( arguments.atk.mastery == "Graze" ) {
+			var grazeDamage = max( 0, _weaponAbilityMod( attacker, weapon ) );
+			if ( grazeDamage > 0 && !( structKeyExists( defender, "immunities" ) && arrayFindNoCase( defender.immunities, weapon.damageType ) ) ) {
+				defender.hitPoints = max( 0, defender.hitPoints - grazeDamage );
+				arguments.atk.log.prepend( "#attacker.name#'s Graze still grazes #defender.name# for #grazeDamage# #weapon.damageType# damage (#defender.hitPoints#/#defender.maxHitPoints# HP)." );
+				checkConcentration( arguments.atk.log, defender, grazeDamage );
+				recordThreat( defender, attacker, grazeDamage );
 			}
-			return;
 		}
+	}
 
-		var dice = variables.dice.parseDice( arguments.weapon.damageDice );
+	/**
+	 * Stage 3 — the damage roll: weapon dice (doubled on a crit), Half-Orc
+	 * Savage Attacks' extra crit die, Great Weapon Fighting's minimum die
+	 * face, the Savage Attacker feat's roll-twice-take-higher, the off-hand
+	 * ability-modifier omission, once-per-turn Sneak Attack, and Rage's
+	 * melee damage bonus. Records `atk.damage` plus the log annotations.
+	 */
+	private function _rollDamage( atk ) {
+		var attacker = arguments.atk.attacker;
+		var weapon   = arguments.atk.weapon;
+		var isCrit   = arguments.atk.isCrit;
+
+		var dice = variables.dice.parseDice( weapon.damageDice );
 		var diceCount = dice.count * ( isCrit ? 2 : 1 );
 		// Half-Orc Savage Attacks: one extra weapon damage die on a melee crit.
 		var usedSavageAttacks = (
-			isCrit && structKeyExists( arguments.weapon, "category" ) && arguments.weapon.category == "melee" &&
-			structKeyExists( arguments.attacker, "hasSavageAttacks" ) && arguments.attacker.hasSavageAttacks
+			isCrit && structKeyExists( weapon, "category" ) && weapon.category == "melee" &&
+			structKeyExists( attacker, "hasSavageAttacks" ) && attacker.hasSavageAttacks
 		);
 		if ( usedSavageAttacks ) {
 			diceCount += 1;
 		}
 		// Great Weapon Fighting: treat any 1 or 2 rolled on the weapon's damage
 		// dice as a 3, for a Two-Handed or Versatile Melee weapon.
-		var hasGreatWeaponFighting = structKeyExists( arguments.attacker, "feats" ) && arrayFindNoCase( arguments.attacker.feats, "Great Weapon Fighting" ) > 0;
+		var hasGreatWeaponFighting = structKeyExists( attacker, "feats" ) && arrayFindNoCase( attacker.feats, "Great Weapon Fighting" ) > 0;
 		var usesGreatWeaponFighting = (
-			hasGreatWeaponFighting && arguments.weapon.category == "melee" &&
-			structKeyExists( arguments.weapon, "properties" ) &&
-			( arrayFindNoCase( arguments.weapon.properties, "Two-Handed" ) > 0 || arrayFindNoCase( arguments.weapon.properties, "Versatile" ) > 0 )
+			hasGreatWeaponFighting && weapon.category == "melee" &&
+			structKeyExists( weapon, "properties" ) &&
+			( arrayFindNoCase( weapon.properties, "Two-Handed" ) > 0 || arrayFindNoCase( weapon.properties, "Versatile" ) > 0 )
 		);
 		var damageRoll = usesGreatWeaponFighting ? variables.dice.rollSumMinFace( diceCount, dice.sides, 3 ) : variables.dice.rollSum( diceCount, dice.sides );
 		// Savage Attacker: once per turn, roll the weapon's damage dice twice
 		// and use either roll — take the higher of the two.
 		var usedSavageAttacker = false;
-		if ( structKeyExists( arguments.attacker, "hasSavageAttacker" ) && arguments.attacker.hasSavageAttacker ) {
+		if ( structKeyExists( attacker, "hasSavageAttacker" ) && attacker.hasSavageAttacker ) {
 			var secondRoll = usesGreatWeaponFighting ? variables.dice.rollSumMinFace( diceCount, dice.sides, 3 ) : variables.dice.rollSum( diceCount, dice.sides );
 			damageRoll = max( damageRoll, secondRoll );
 			usedSavageAttacker = true;
 		}
 		// Two-Weapon Fighting off-hand attacks omit the ability modifier from
 		// damage unless the attacker has the Two-Weapon Fighting feat.
-		var damage = damageRoll + ( arguments.omitDamageBonus ? 0 : arguments.weapon.damageBonus );
-		var savageNote = usedSavageAttacker ? " (Savage Attacker)" : "";
-		var savageAttacksNote = usedSavageAttacks ? " (Savage Attacks)" : "";
-		var gwfNote = usesGreatWeaponFighting ? " (Great Weapon Fighting)" : "";
+		var damage = damageRoll + ( arguments.atk.omitDamageBonus ? 0 : weapon.damageBonus );
+		var damageNotes = "#usedSavageAttacker ? ' (Savage Attacker)' : ''#" &
+			"#usedSavageAttacks ? ' (Savage Attacks)' : ''#" &
+			"#usesGreatWeaponFighting ? ' (Great Weapon Fighting)' : ''#";
 
 		// Sneak Attack (Rogue 1): once per turn, on a hit with a Finesse or
 		// ranged weapon made with Advantage, extra ceil(level/2)d6 damage
@@ -801,86 +866,107 @@ class singleton {
 		// giving resolveAttack full battlefield adjacency), so in practice
 		// this only triggers via an existing Advantage source (a Restrained/
 		// Blinded/helpless/Prone-in-melee target, Pack Tactics, etc.).
-		var hasSneakAttack = structKeyExists( arguments.attacker, "features" ) && arrayFindNoCase( arguments.attacker.features, "Sneak Attack" ) > 0;
+		var hasSneakAttack = structKeyExists( attacker, "features" ) && arrayFindNoCase( attacker.features, "Sneak Attack" ) > 0;
 		var usedSneakAttack = (
-			hasSneakAttack && useAdvantage &&
-			!( structKeyExists( arguments.attacker, "usedSneakAttackThisTurn" ) && arguments.attacker.usedSneakAttackThisTurn ) &&
-			( arguments.weapon.category == "ranged" || ( structKeyExists( arguments.weapon, "properties" ) && arrayFindNoCase( arguments.weapon.properties, "Finesse" ) > 0 ) )
+			hasSneakAttack && arguments.atk.useAdvantage &&
+			!( structKeyExists( attacker, "usedSneakAttackThisTurn" ) && attacker.usedSneakAttackThisTurn ) &&
+			( weapon.category == "ranged" || ( structKeyExists( weapon, "properties" ) && arrayFindNoCase( weapon.properties, "Finesse" ) > 0 ) )
 		);
-		var sneakAttackNote = "";
 		if ( usedSneakAttack ) {
-			var sneakDiceCount = ceiling( arguments.attacker.level / 2 ) * ( isCrit ? 2 : 1 );
+			var sneakDiceCount = ceiling( attacker.level / 2 ) * ( isCrit ? 2 : 1 );
 			var sneakDamage = variables.dice.rollSum( sneakDiceCount, 6 );
 			damage += sneakDamage;
-			arguments.attacker.usedSneakAttackThisTurn = true;
-			sneakAttackNote = " +#sneakDamage# Sneak Attack";
+			attacker.usedSneakAttackThisTurn = true;
+			damageNotes &= " +#sneakDamage# Sneak Attack";
 		}
 
 		// Rage (Barbarian): +2/+3/+4 (by level) to melee weapon damage while
 		// raging — RAW ties this to Strength-based attacks specifically; this
 		// app doesn't track which ability a Finesse weapon attack actually
 		// used, so it's simplified to "any melee weapon while raging."
-		var rageNote = "";
-		if ( structKeyExists( arguments.attacker, "isRaging" ) && arguments.attacker.isRaging && arguments.weapon.category == "melee" ) {
-			var rageBonus = _rageDamageBonus( arguments.attacker.level );
+		if ( structKeyExists( attacker, "isRaging" ) && attacker.isRaging && weapon.category == "melee" ) {
+			var rageBonus = _rageDamageBonus( attacker.level );
 			damage += rageBonus;
-			rageNote = " +#rageBonus# Rage";
+			damageNotes &= " +#rageBonus# Rage";
 		}
 
-		if ( structKeyExists( arguments.defender, "immunities" ) && arrayFindNoCase( arguments.defender.immunities, arguments.weapon.damageType ) ) {
+		arguments.atk.damage      = damage;
+		arguments.atk.damageNotes = damageNotes;
+	}
+
+	/**
+	 * Stage 4 — applies `atk.damage` through the defender's Immunity/
+	 * Vulnerability/Resistance (and Petrified's resist-everything), subtracts
+	 * HP, breaks Concentration, records threat, and writes the hit log line.
+	 */
+	private function _applyDamage( atk ) {
+		var attacker = arguments.atk.attacker;
+		var defender = arguments.atk.defender;
+		var weapon   = arguments.atk.weapon;
+		var damage   = arguments.atk.damage;
+
+		if ( structKeyExists( defender, "immunities" ) && arrayFindNoCase( defender.immunities, weapon.damageType ) ) {
 			damage = 0;
 		} else {
-			if ( structKeyExists( arguments.defender, "vulnerabilities" ) && arrayFindNoCase( arguments.defender.vulnerabilities, arguments.weapon.damageType ) ) {
+			if ( structKeyExists( defender, "vulnerabilities" ) && arrayFindNoCase( defender.vulnerabilities, weapon.damageType ) ) {
 				damage *= 2;
 			}
-			if ( structKeyExists( arguments.defender, "resistances" ) && arrayFindNoCase( arguments.defender.resistances, arguments.weapon.damageType ) ) {
+			if ( structKeyExists( defender, "resistances" ) && arrayFindNoCase( defender.resistances, weapon.damageType ) ) {
 				damage = int( damage / 2 );
 			}
 			// Petrified: resistance to all damage, regardless of type.
-			if ( hasCondition( arguments.defender, "Petrified" ) ) {
+			if ( hasCondition( defender, "Petrified" ) ) {
 				damage = int( damage / 2 );
 			}
 		}
+		arguments.atk.damage = damage;
 
-		arguments.defender.hitPoints = max( 0, arguments.defender.hitPoints - damage );
-		checkConcentration( arguments.log, arguments.defender, damage );
-		recordThreat( arguments.defender, arguments.attacker, damage );
+		defender.hitPoints = max( 0, defender.hitPoints - damage );
+		checkConcentration( arguments.atk.log, defender, damage );
+		recordThreat( defender, attacker, damage );
 
-		arguments.log.prepend(
-			"#actionPhrase#: #roll# + #arguments.weapon.attackBonus + styleBonus# = #total# vs AC #effectiveAC##coverNote##disadvantageNote##luckNote##styleNote##inspirationNote#. " &
-			( isCrit ? "Critical hit! " : "Hit! " ) &
-			"#damage# #arguments.weapon.damageType# damage#savageNote##savageAttacksNote##gwfNote##sneakAttackNote##rageNote# (#arguments.defender.hitPoints#/#arguments.defender.maxHitPoints# HP)."
+		arguments.atk.log.prepend(
+			"#arguments.atk.actionPhrase#: #arguments.atk.roll# + #weapon.attackBonus + arguments.atk.styleBonus# = #arguments.atk.total# vs AC #arguments.atk.effectiveAC##arguments.atk.notes#. " &
+			( arguments.atk.isCrit ? "Critical hit! " : "Hit! " ) &
+			"#damage# #weapon.damageType# damage#arguments.atk.damageNotes# (#defender.hitPoints#/#defender.maxHitPoints# HP)."
 		);
+	}
 
-		// Weapon Mastery — everything below is a post-hit rider that doesn't
-		// change the damage number already logged above.
+	/**
+	 * Stage 5 — post-hit Weapon Mastery riders (Sap/Vex/Slow/Topple/Push/
+	 * Cleave); none of them change the damage number already logged.
+	 */
+	private function _applyMasteryRiders( atk ) {
+		var attacker = arguments.atk.attacker;
+		var defender = arguments.atk.defender;
+		var mastery  = arguments.atk.mastery;
 		if ( mastery == "Sap" ) {
-			arguments.defender.sapped = true;
-			arguments.log.prepend( "#arguments.defender.name# is Sapped — Disadvantage on their next attack roll." );
+			defender.sapped = true;
+			arguments.atk.log.prepend( "#defender.name# is Sapped — Disadvantage on their next attack roll." );
 		}
 		if ( mastery == "Vex" ) {
-			arguments.attacker.vexAdvantageTarget = arguments.defender.name;
-			arguments.log.prepend( "#arguments.attacker.name# gains Advantage on their next attack against #arguments.defender.name# (Vex)." );
+			attacker.vexAdvantageTarget = defender.name;
+			arguments.atk.log.prepend( "#attacker.name# gains Advantage on their next attack against #defender.name# (Vex)." );
 		}
-		if ( mastery == "Slow" && damage > 0 ) {
-			arguments.defender.speedPenalty = ( structKeyExists( arguments.defender, "speedPenalty" ) ? arguments.defender.speedPenalty : 0 ) + 10;
-			arguments.log.prepend( "#arguments.defender.name#'s Speed is reduced by 10 ft. (Slow)." );
+		if ( mastery == "Slow" && arguments.atk.damage > 0 ) {
+			defender.speedPenalty = ( structKeyExists( defender, "speedPenalty" ) ? defender.speedPenalty : 0 ) + 10;
+			arguments.atk.log.prepend( "#defender.name#'s Speed is reduced by 10 ft. (Slow)." );
 		}
 		if ( mastery == "Topple" ) {
-			var toppleDC = 8 + arguments.attacker.proficiencyBonus + _weaponAbilityMod( arguments.attacker, arguments.weapon );
-			var toppleSave = rollSavingThrow( arguments.defender, "con", toppleDC );
+			var toppleDC = 8 + attacker.proficiencyBonus + _weaponAbilityMod( attacker, arguments.atk.weapon );
+			var toppleSave = rollSavingThrow( defender, "con", toppleDC );
 			if ( !toppleSave.success ) {
-				addCondition( arguments.defender, "Prone" );
-				arguments.log.prepend( "#arguments.defender.name# fails a DC #toppleDC# Constitution save and topples Prone!" );
+				addCondition( defender, "Prone" );
+				arguments.atk.log.prepend( "#defender.name# fails a DC #toppleDC# Constitution save and topples Prone!" );
 			} else {
-				arguments.log.prepend( "#arguments.defender.name# succeeds on a DC #toppleDC# Constitution save and stays upright (Topple)." );
+				arguments.atk.log.prepend( "#defender.name# succeeds on a DC #toppleDC# Constitution save and stays upright (Topple)." );
 			}
 		}
-		if ( mastery == "Push" && !isNull( variables.grid.stateGrid( arguments.state ) ) ) {
-			_applyWeaponMasteryPush( arguments.log, arguments.attacker, arguments.defender, variables.grid.stateGrid( arguments.state ) );
+		if ( mastery == "Push" && !isNull( variables.grid.stateGrid( arguments.atk.state ) ) ) {
+			_applyWeaponMasteryPush( arguments.atk.log, attacker, defender, variables.grid.stateGrid( arguments.atk.state ) );
 		}
-		if ( mastery == "Cleave" && arguments.weapon.category == "melee" && ( structKeyExists( arguments.state, "opponent" ) || structKeyExists( arguments.state, "opponents" ) ) ) {
-			_applyWeaponMasteryCleave( arguments.state, arguments.attacker, arguments.defender, arguments.weapon, damage );
+		if ( mastery == "Cleave" && arguments.atk.weapon.category == "melee" && ( structKeyExists( arguments.atk.state, "opponent" ) || structKeyExists( arguments.atk.state, "opponents" ) ) ) {
+			_applyWeaponMasteryCleave( arguments.atk.state, attacker, defender, arguments.atk.weapon, arguments.atk.damage );
 		}
 	}
 
