@@ -292,7 +292,7 @@ class singleton {
 			 WHERE FIND_IN_SET( :className, REPLACE( classes, ', ', ',' ) ) > 0
 			   AND level = :level
 			   AND effect_type IN ( #preferredTypes# )
-			   AND ( damage_dice IS NULL OR damage_dice REGEXP '^[0-9]+d[0-9]+$' )
+			   AND ( damage_dice IS NULL OR damage_dice REGEXP '^[0-9]+d[0-9]+(\\+[0-9]+)?$' )
 			   AND ( heal_dice IS NULL OR heal_dice REGEXP '^[0-9]+d[0-9]+$' )
 			 ORDER BY ( name = :preferredName ) DESC, name
 			 LIMIT 1",
@@ -312,7 +312,7 @@ class singleton {
 				 WHERE FIND_IN_SET( :className, REPLACE( classes, ', ', ',' ) ) > 0
 				   AND level = :level
 				   AND effect_type IN ( #fallbackTypes# )
-				   AND ( damage_dice IS NULL OR damage_dice REGEXP '^[0-9]+d[0-9]+$' )
+				   AND ( damage_dice IS NULL OR damage_dice REGEXP '^[0-9]+d[0-9]+(\\+[0-9]+)?$' )
 				   AND ( heal_dice IS NULL OR heal_dice REGEXP '^[0-9]+d[0-9]+$' )
 				 ORDER BY ( name = :preferredName ) DESC, name
 				 LIMIT 1",
@@ -355,18 +355,18 @@ class singleton {
 		if ( arguments.rows.effect_type[ arguments.i ] == "attack" ) {
 			return {
 				"type": "attack", "name": arguments.rows.name[ arguments.i ], "level": level, "concentration": concentration, "damageType": arguments.rows.damage_type[ arguments.i ],
-				"diceCount": damageDice.count, "diceSides": damageDice.sides, "rangeSquares": rangeSquares
+				"diceCount": damageDice.count, "diceSides": damageDice.sides, "flatBonus": damageDice.flatBonus, "rangeSquares": rangeSquares
 			};
 		}
 		return {
 			"type": "save", "name": arguments.rows.name[ arguments.i ], "level": level, "concentration": concentration, "damageType": arguments.rows.damage_type[ arguments.i ],
 			"saveAbility": arguments.rows.save_ability[ arguments.i ], "saveEffect": arguments.rows.save_effect[ arguments.i ],
-			"diceCount": damageDice.count, "diceSides": damageDice.sides, "rangeSquares": rangeSquares
+			"diceCount": damageDice.count, "diceSides": damageDice.sides, "flatBonus": damageDice.flatBonus, "rangeSquares": rangeSquares
 		};
 	}
 
 	/**
-	 * Lists every castable (non-utility, plain-"NdM"-dice) spell `className`
+	 * Lists every castable (non-utility, "NdM" or "NdM+K"-dice) spell `className`
 	 * has available at `level` (0 for cantrips, 1 for 1st-level spells) — the
 	 * options a player picks from at character creation (see
 	 * app/wires/characterCreation.bx). Each entry is the same struct shape
@@ -382,7 +382,7 @@ class singleton {
 			 WHERE FIND_IN_SET( :className, REPLACE( classes, ', ', ',' ) ) > 0
 			   AND level = :level
 			   AND effect_type IN ( 'attack', 'save', 'heal' )
-			   AND ( damage_dice IS NULL OR damage_dice REGEXP '^[0-9]+d[0-9]+$' )
+			   AND ( damage_dice IS NULL OR damage_dice REGEXP '^[0-9]+d[0-9]+(\\+[0-9]+)?$' )
 			   AND ( heal_dice IS NULL OR heal_dice REGEXP '^[0-9]+d[0-9]+$' )
 			 ORDER BY name",
 			{ "className": arguments.className, "level": arguments.level },
@@ -410,7 +410,7 @@ class singleton {
 			 FROM spells
 			 WHERE name = :name
 			   AND effect_type IN ( 'attack', 'save', 'heal' )
-			   AND ( damage_dice IS NULL OR damage_dice REGEXP '^[0-9]+d[0-9]+$' )
+			   AND ( damage_dice IS NULL OR damage_dice REGEXP '^[0-9]+d[0-9]+(\\+[0-9]+)?$' )
 			   AND ( heal_dice IS NULL OR heal_dice REGEXP '^[0-9]+d[0-9]+$' )
 			 LIMIT 1",
 			{ "name": arguments.name },

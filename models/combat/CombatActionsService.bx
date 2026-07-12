@@ -1796,12 +1796,13 @@ class singleton {
 		}
 		var spell = arguments.spell;
 		var resourceNote = usedMagicInitiate ? " (Magic Initiate's bonus spell)" : " (spends a level-#slotSpent# slot)";
+		var flatBonus = spell.keyExists( "flatBonus" ) ? spell.flatBonus : 0;
 		if ( spell.type == "heal" ) {
 			_castHealSpell( arguments.state, arguments.attacker, arguments.defender, spell.name, resourceNote, spell.diceCount, spell.diceSides );
 		} else if ( spell.type == "attack" ) {
-			_castAttackSpell( arguments.state, arguments.attacker, arguments.defender, arguments.defenderIsPlayer, spell.name, spell.diceCount, spell.diceSides, spell.damageType, resourceNote );
+			_castAttackSpell( arguments.state, arguments.attacker, arguments.defender, arguments.defenderIsPlayer, spell.name, spell.diceCount, spell.diceSides, spell.damageType, resourceNote, flatBonus );
 		} else if ( spell.type == "save" ) {
-			_castSaveDamageSpell( arguments.state, arguments.attacker, arguments.defender, arguments.defenderIsPlayer, spell.name, spell.saveAbility, spell.diceCount, spell.diceSides, spell.damageType, spell.saveEffect, resourceNote );
+			_castSaveDamageSpell( arguments.state, arguments.attacker, arguments.defender, arguments.defenderIsPlayer, spell.name, spell.saveAbility, spell.diceCount, spell.diceSides, spell.damageType, spell.saveEffect, resourceNote, flatBonus );
 		} else {
 			// Legacy fallback: Magic Initiate's default bonus spell when no
 			// real DB spell was found for the class ({"type":"damage","name":"Magic Missile"}).
@@ -1815,7 +1816,7 @@ class singleton {
 	 * vs. the defender's AC, dealing `diceCount`d`diceSides` damage on a hit
 	 * (doubled on a natural 20).
 	 */
-	private function _castAttackSpell( state, attacker, defender, defenderIsPlayer, spellName, diceCount, diceSides, damageType, resourceNote = "" ) {
+	private function _castAttackSpell( state, attacker, defender, defenderIsPlayer, spellName, diceCount, diceSides, damageType, resourceNote = "", flatBonus = 0 ) {
 		var spellMod = arguments.attacker.modifiers[ arguments.attacker.spellcastingAbility ];
 		var cover = coverBonus( arguments.state, arguments.attacker, arguments.defender );
 		var effectiveAC = arguments.defender.armorClass + cover;
@@ -1832,7 +1833,7 @@ class singleton {
 			return;
 		}
 
-		var damage = variables.dice.rollSum( arguments.diceCount * ( isCrit ? 2 : 1 ), arguments.diceSides );
+		var damage = variables.dice.rollSum( arguments.diceCount * ( isCrit ? 2 : 1 ), arguments.diceSides ) + arguments.flatBonus;
 		damage = applyDamageModifiers( arguments.defender, damage, arguments.damageType );
 
 		arguments.defender.hitPoints = max( 0, arguments.defender.hitPoints - damage );
@@ -1854,12 +1855,12 @@ class singleton {
 	 * for a real leveled spell, or "half" for the hardcoded cantrips — either
 	 * half damage or none at all on a success.
 	 */
-	private function _castSaveDamageSpell( state, attacker, defender, defenderIsPlayer, spellName, saveAbility, diceCount, diceSides, damageType, saveEffect = "half", resourceNote = "" ) {
+	private function _castSaveDamageSpell( state, attacker, defender, defenderIsPlayer, spellName, saveAbility, diceCount, diceSides, damageType, saveEffect = "half", resourceNote = "", flatBonus = 0 ) {
 		var dc = 8 + arguments.attacker.proficiencyBonus + arguments.attacker.modifiers[ arguments.attacker.spellcastingAbility ];
 		var cover = coverBonus( arguments.state, arguments.attacker, arguments.defender );
 		var saveResult = rollSavingThrow( arguments.defender, arguments.saveAbility, dc, "", true, cover, arguments.state );
 
-		var damage = variables.dice.rollSum( arguments.diceCount, arguments.diceSides );
+		var damage = variables.dice.rollSum( arguments.diceCount, arguments.diceSides ) + arguments.flatBonus;
 		var successText = "succeeds. No effect. ";
 		if ( saveResult.success && arguments.saveEffect == "half" ) {
 			damage = int( damage / 2 );

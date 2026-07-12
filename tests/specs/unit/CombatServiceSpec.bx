@@ -466,6 +466,18 @@ class extends="testbox.system.BaseSpec" {
 					expect( dice.count ).toBe( 0 );
 					expect( dice.sides ).toBe( 0 );
 				} );
+
+				it( "parses NdM+K notation into count, sides, and a flat bonus (e.g. Finger of Death's '7d8+30')", () => {
+					var dice = service.parseDice( "7d8+30" );
+					expect( dice.count ).toBe( 7 );
+					expect( dice.sides ).toBe( 8 );
+					expect( dice.flatBonus ).toBe( 30 );
+				} );
+
+				it( "defaults flatBonus to 0 for plain NdM notation", () => {
+					var dice = service.parseDice( "2d6" );
+					expect( dice.flatBonus ).toBe( 0 );
+				} );
 			} );
 
 			describe( "rollSum()", () => {
@@ -2198,6 +2210,20 @@ class extends="testbox.system.BaseSpec" {
 					expect( state.log.len() ).toBe( 0 );
 					expect( state.actionUsed ).toBeFalse();
 				} );
+
+				it( "castLeveledSpell() adds a save spell's flatBonus to the dice damage (e.g. Finger of Death's '7d8+30')", () => {
+					// A save that fails takes full (dice + flatBonus) damage; an
+					// overwhelmingly negative save modifier makes failure certain
+					// so the flat bonus is deterministically observable.
+					var player = makeCaster( { "spellSlots": { "7": 1 }, "knownLeveledSpells": [
+						{ "type": "save", "name": "Finger of Death", "damageType": "Necrotic", "saveAbility": "con", "saveEffect": "half", "rangeSquares": 12, "level": 7, "concentration": false, "diceCount": 1, "diceSides": 1, "flatBonus": 30 }
+					] } );
+					var opponent = makeCombatant( 1, 0, { "modifiers": { "con": -50 } } );
+					var state = makeSpellState( player, { "opponent": opponent } );
+					service.castLeveledSpell( state );
+					// 1d1 always rolls 1, so a failed save deals exactly 1 + 30 = 31.
+					expect( 500 - opponent.hitPoints ).toBe( 31 );
+				} );
 			} );
 
 			describe( "hasSpellResource() (gates the combat screen's Cast buttons)", () => {
@@ -2279,6 +2305,95 @@ class extends="testbox.system.BaseSpec" {
 					var result = service.pendingSpellChoice( -1 );
 					expect( result.pending ).toBeFalse();
 					expect( result.availableSpells.len() ).toBe( 0 );
+				} );
+			} );
+
+			describe( "Spell/cantrip progression per class (pendingSpellChoice() / pendingCantripChoice())", () => {
+				// Same as the Fighting Styles fixtures above: these are keyed by a
+				// bare characterId and read/write the DB directly, so each case
+				// needs a real throwaway `characters` row at a specific class/level.
+				function makeCasterCharacter( classId, level, extra = {} ){
+					var fields = { "class_id": arguments.classId, "level": arguments.level, "str": 10, "dex": 10, "con": 10, "int_score": 10, "wis": 10, "cha": 10, "proficiency_bonus": 2, "armor_class": 10, "hit_points": 10, "max_hit_points": 10 }.append( arguments.extra );
+					var columns = structKeyArray( fields );
+					var placeholders = columns.map( ( c ) => ":#c#" );
+					var params = {};
+					for ( var c in columns ) {
+						params[ c ] = fields[ c ];
+					}
+					queryExecute(
+						"INSERT INTO characters (name, #arrayToList( columns )#) VALUES ('Test Character', #arrayToList( placeholders )#)",
+						params, { datasource: "gameserver", result: "local.insertResult" }
+					);
+					return local.insertResult.generatedKey;
+				}
+
+				function dropCasterCharacter( characterId ){
+					queryExecute( "DELETE FROM characters WHERE id = :id", { "id": arguments.characterId }, { datasource: "gameserver" } );
+				}
+
+				it( "never reports a pending choice with zero available options, for every caster class at every level (regression: dead-end picker)", () => {
+					// This is the invariant the stuck-picker fix restores: a
+					// class/level combo whose seed data has no mechanically-modeled
+					// spell/cantrip at the newly-unlocked level (e.g. Paladin's
+					// 3rd/4th-level slots, Cleric's cantrip list) must resolve to
+					// pending:false rather than a dead end with nothing to pick.
+					var casterClassIds = { "Bard": 2, "Cleric": 3, "Druid": 4, "Paladin": 7, "Ranger": 8, "Sorcerer": 10, "Warlock": 11, "Wizard": 12 };
+					for ( var className in casterClassIds ) {
+						for ( var level = 1; level <= 20; level++ ) {
+							var characterId = makeCasterCharacter( casterClassIds[ className ], level );
+							var spellChoice = service.pendingSpellChoice( characterId );
+							if ( spellChoice.pending ) {
+								expect( spellChoice.availableSpells.len() ).toBeGT( 0 );
+							}
+							var cantripChoice = service.pendingCantripChoice( characterId );
+							if ( cantripChoice.pending ) {
+								expect( cantripChoice.availableCantrips.len() ).toBeGT( 0 );
+							}
+							dropCasterCharacter( characterId );
+						}
+					}
+				} );
+
+				it( "reproduces the fixed dead-end case: Paladin level 9 (3rd-level slots unlocked, zero castable 3rd-level Paladin spells)", () => {
+					var characterId = makeCasterCharacter( 7, 9 );
+					var result = service.pendingSpellChoice( characterId );
+					expect( result.level ).toBe( 3 );
+					expect( result.pending ).toBeFalse();
+					expect( result.availableSpells.len() ).toBe( 0 );
+					dropCasterCharacter( characterId );
+				} );
+
+				it( "reproduces the fixed dead-end case: Cleric level 4 cantrips (expects 3 known, only 1 mechanically-modeled Cleric cantrip exists)", () => {
+					var characterId = makeCasterCharacter( 3, 4 );
+					var result = service.pendingCantripChoice( characterId );
+					expect( result.pending ).toBeTrue();
+					expect( result.availableCantrips.len() ).toBe( 1 );
+					expect( result.availableCantrips[ 1 ].name ).toBe( "Sacred Flame" );
+
+					service.chooseCantrip( characterId, "Sacred Flame" );
+					var afterChoosing = service.pendingCantripChoice( characterId );
+					expect( afterChoosing.pending ).toBeFalse();
+					expect( afterChoosing.availableCantrips.len() ).toBe( 0 );
+					dropCasterCharacter( characterId );
+				} );
+
+				it( "still offers a real pick when spells genuinely exist: Wizard level 5 (3rd-level slots unlocked)", () => {
+					var characterId = makeCasterCharacter( 12, 5 );
+					var result = service.pendingSpellChoice( characterId );
+					expect( result.level ).toBe( 3 );
+					expect( result.pending ).toBeTrue();
+					expect( result.availableSpells.len() ).toBeGT( 0 );
+					dropCasterCharacter( characterId );
+				} );
+
+				it( "listCastableSpells() returns Finger of Death for Warlock at level 7 now that dice-with-flat-modifier notation ('7d8+30') is supported", () => {
+					var spells = service.listCastableSpells( "Warlock", 7 );
+					var names = spells.map( ( s ) => s.name );
+					expect( names ).toInclude( "Finger of Death" );
+					var fingerOfDeath = spells.filter( ( s ) => s.name == "Finger of Death" )[ 1 ];
+					expect( fingerOfDeath.diceCount ).toBe( 7 );
+					expect( fingerOfDeath.diceSides ).toBe( 8 );
+					expect( fingerOfDeath.flatBonus ).toBe( 30 );
 				} );
 			} );
 

@@ -5,17 +5,21 @@
 class singleton {
 
 	/**
-	 * Parses "NdM" dice notation into { count, sides }. Malformed notation
-	 * (no "d") returns { count: 0, sides: 0 } so an attack with 0 dice just
+	 * Parses "NdM" or "NdM+K" dice notation into { count, sides, flatBonus }
+	 * (e.g. Finger of Death's "7d8+30"). Malformed notation (no "d") returns
+	 * { count: 0, sides: 0, flatBonus: 0 } so an attack with 0 dice just
 	 * deals its flat damage bonus, same as a real SRD flat-damage attack,
 	 * rather than crashing combat outright.
 	 */
 	function parseDice( notation ) {
-		var parts = listToArray( arguments.notation, "d" );
+		var plusIndex = find( "+", arguments.notation );
+		var dicePart = plusIndex ? left( arguments.notation, plusIndex - 1 ) : arguments.notation;
+		var flatBonus = plusIndex ? int( mid( arguments.notation, plusIndex + 1, len( arguments.notation ) ) ) : 0;
+		var parts = listToArray( dicePart, "d" );
 		if ( parts.len() < 2 ) {
-			return { "count": 0, "sides": 0 };
+			return { "count": 0, "sides": 0, "flatBonus": flatBonus };
 		}
-		return { "count": int( parts[ 1 ] ), "sides": int( parts[ 2 ] ) };
+		return { "count": int( parts[ 1 ] ), "sides": int( parts[ 2 ] ), "flatBonus": flatBonus };
 	}
 
 	/**
