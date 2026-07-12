@@ -9,6 +9,23 @@ function partyColorClass( idx ) {
 	return "party-color-" + ( ( ( idx - 1 ) % PARTY_COLOR_COUNT ) + 1 );
 }
 
+// Encounter/map state lives at module scope (outside the component) so it
+// survives navigating away from /combat and back — the component instance
+// (and any plain ref() inside setup()) is destroyed on unmount, but this
+// module is only ever loaded once for the page's lifetime. onMounted()
+// checks partyKey against the currently-selected party before deciding
+// whether to resume this or fetch a fresh encounter.
+const persistedEncounter = Vue.reactive( {
+	encounterKey: "",
+	partyKey: "",
+	mapLoaded: false,
+	mapTiles: [],
+	mapDecs: [],
+	mapWidth: 0,
+	mapHeight: 0,
+	mapPois: []
+} );
+
 const CombatEncounter = {
 	template: `
 		<div class="encounter">
@@ -288,13 +305,8 @@ const CombatEncounter = {
 		const gameState = inject( "gameState" );
 		const apiCall   = inject( "api" );
 
-		const loading    = ref( true );
-		const mapLoaded  = ref( false );
-		const mapTiles   = ref( [] );
-		const mapDecs    = ref( [] );
-		const mapWidth   = ref( 0 );
-		const mapHeight  = ref( 0 );
-		const mapPois    = ref( [] );
+		const loading = ref( true );
+		const { encounterKey, mapLoaded, mapTiles, mapDecs, mapWidth, mapHeight, mapPois } = Vue.toRefs( persistedEncounter );
 
 		const asiMode         = ref( "single" );
 		const asiAbility1     = ref( "str" );
@@ -313,8 +325,6 @@ const CombatEncounter = {
 		];
 
 		const cs = gameState;
-
-		const encounterKey = ref( "" );
 
 		onMounted( async () => {
 			const charId     = localStorage.getItem( "charId" );
@@ -335,6 +345,19 @@ const CombatEncounter = {
 				VueRouter.useRouter().push( "/" );
 				return;
 			}
+
+			// Resume an already-loaded, still-active encounter for this exact
+			// party/module instead of starting a fresh one — e.g. navigating to
+			// the Character Sheet mid-fight and back to Adventure shouldn't
+			// reset progress. persistedEncounter survives this component's
+			// unmount; a mismatched key means a different party/module was
+			// picked since, so a fresh encounter is correct there.
+			const partyKey = charIds.slice().sort().join( "," ) + "|" + moduleSlug + "|" + mapSlug;
+			if ( encounterKey.value && persistedEncounter.partyKey === partyKey && !cs.gameOver ) {
+				loading.value = false;
+				return;
+			}
+			persistedEncounter.partyKey = partyKey;
 
 			try {
 				const data = await apiCall( "/api/combat.bxm", {
