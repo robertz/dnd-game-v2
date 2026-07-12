@@ -234,10 +234,24 @@ function createReconnectingSocket( url ) {
 	let ws = null;
 	let attempts = 0;
 	const messageListeners = new Set();
+	// Combat actions (move/attack/rest/...) route through send() with no
+	// optimistic UI update — a send that silently drops because the socket
+	// isn't OPEN yet (the combat view renders from an HTTP fetch, so a click
+	// can easily land before the WS handshake finishes) looks exactly like
+	// "nothing is clickable," with no error and no visual feedback at all.
+	// Queue instead, and flush once the connection (re)opens.
+	const sendQueue = [];
+	const MAX_QUEUED = 20;
 
 	function connect() {
 		ws = new WebSocket( url );
-		ws.onopen  = () => { attempts = 0; console.log( "SocketBox connected" ); };
+		ws.onopen  = () => {
+			attempts = 0;
+			console.log( "SocketBox connected" );
+			while ( sendQueue.length && ws.readyState === WebSocket.OPEN ) {
+				ws.send( sendQueue.shift() );
+			}
+		};
 		ws.onerror = ( err ) => console.error( "SocketBox error", err );
 		ws.onclose = () => {
 			const delay = Math.min( 30000, 1000 * 2 ** attempts++ );
@@ -259,7 +273,15 @@ function createReconnectingSocket( url ) {
 			ws.removeEventListener( type, fn );
 		},
 		send( data ) {
-			if ( ws.readyState === WebSocket.OPEN ) ws.send( data );
+			if ( ws.readyState === WebSocket.OPEN ) {
+				ws.send( data );
+				return;
+			}
+			sendQueue.push( data );
+			// Bound the queue so a long-dead connection can't replay a huge
+			// backlog of stale clicks once it eventually reconnects — drop the
+			// oldest first, keeping the most recent (most likely still-relevant) actions.
+			if ( sendQueue.length > MAX_QUEUED ) sendQueue.shift();
 		}
 	};
 }
