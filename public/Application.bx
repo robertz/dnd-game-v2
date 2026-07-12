@@ -13,10 +13,11 @@ class {
 
 	/**
 	 * A cache-busting token for static assets (index.bxm appends it as
-	 * ?v=... on every <script>/<link> tag) — fixed for the life of the
-	 * server process, so browsers still cache assets between requests but
-	 * a restart (i.e. every deploy) forces every client to fetch fresh
-	 * copies instead of serving stale JS/CSS from disk cache.
+	 * ?v=... on every <script>/<link> tag) — normally fixed for the life of
+	 * the server process, so browsers still cache assets between requests
+	 * but a restart (i.e. every deploy) forces every client to fetch fresh
+	 * copies instead of serving stale JS/CSS from disk cache. Can also be
+	 * regenerated without a restart via ?resetassets=1 — see onRequestStart().
 	 */
 	function onApplicationStart() {
 		application.assetVersion = dateTimeFormat( now(), "yyyyMMddHHmmss" );
@@ -36,6 +37,14 @@ class {
 		// a deploy that doesn't restart the app scope).
 		if ( !structKeyExists( application, "mapService" ) ) {
 			onApplicationStart();
+		}
+		// ?resetassets=1 on any request regenerates the cache-busting token
+		// without a full server restart — index.bxm reads application.assetVersion
+		// fresh on this same request, so the very next page load already gets
+		// new ?v=... URLs. Gated behind an existing session so a random visitor
+		// can't force every other client to refetch assets for no reason.
+		if ( structKeyExists( url, "resetassets" ) && structKeyExists( session, "userId" ) ) {
+			application.assetVersion = dateTimeFormat( now(), "yyyyMMddHHmmss" );
 		}
 		return true;
 	}

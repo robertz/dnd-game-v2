@@ -114,9 +114,13 @@ server.json               CommandBox server config (webroot, WebSocket wiring)
   directly and reload — nothing to compile.
 - **Cache-busting**: every asset `<script>`/`<link>` tag in
   [`index.bxm`](public/index.bxm) carries a `?v=` query string set once at
-  server start ([`Application.bx`](public/Application.bx)). Restart the
-  server (`box server restart`) to force browsers to pick up frontend
-  changes instead of serving stale cached JS/CSS.
+  server start ([`Application.bx`](public/Application.bx)). Restarting the
+  server (`box server restart`) forces browsers to pick up frontend changes
+  instead of serving stale cached JS/CSS — or, without a restart, load any
+  page while logged in with `?resetassets=1` appended (e.g.
+  `/?resetassets=1`) to regenerate the token immediately. Ignored for a
+  logged-out visitor, so it can't be used to force cache invalidation for
+  other users.
 - **Formatting**: `box run-script format` (or `format:check` for CI) formats
   `models/` and root `.bx` files via `boxlang format`.
 - **Exposing it externally (e.g. via ngrok)**: works out of the box —
