@@ -3,7 +3,13 @@ class {
 	this.sessionManagement = true;
 	this.sessionTimeout    = createTimespan( 0, 4, 0, 0 );
 	this.datasource        = "gameserver";
-	this.sessioncookie     = { "httponly": true, "samesite": "Lax" };
+	// `secure` requires HTTPS, which local dev doesn't have — enable it by
+	// setting GAME_COOKIE_SECURE=true in the production environment.
+	this.sessioncookie     = {
+		"httponly": true,
+		"samesite": "Lax",
+		"secure": ( server.system.environment[ "GAME_COOKIE_SECURE" ] ?: "false" ) == "true"
+	};
 
 	/**
 	 * A cache-busting token for static assets (index.bxm appends it as
@@ -14,6 +20,23 @@ class {
 	 */
 	function onApplicationStart() {
 		application.assetVersion = dateTimeFormat( now(), "yyyyMMddHHmmss" );
+		// The model classes are stateless singletons but nothing injects them
+		// (no WireBox here) — share one instance per application instead of
+		// re-instantiating (and re-building their constant tables) on every
+		// request and WebSocket message.
+		application.authService      = new models.AuthService();
+		application.combatService    = new models.CombatService();
+		application.characterService = new models.CharacterService();
+		application.mapService       = new models.MapService();
+		return true;
+	}
+
+	function onRequestStart( targetPage ) {
+		// Guard for an application started before the services existed (e.g.
+		// a deploy that doesn't restart the app scope).
+		if ( !structKeyExists( application, "mapService" ) ) {
+			onApplicationStart();
+		}
 		return true;
 	}
 }

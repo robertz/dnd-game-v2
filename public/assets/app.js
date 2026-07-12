@@ -226,11 +226,45 @@ const router = createRouter( {
 
 // ── WebSocket ─────────────────────────────────────────────────────────────────
 
-const socket = new WebSocket( "/ws" );
+// Thin facade over a WebSocket that reconnects with exponential backoff when
+// the connection drops (laptop sleep, server restart) — otherwise every combat
+// button silently dies with the socket. Components hold this stable object;
+// message listeners are re-attached to each new underlying connection.
+function createReconnectingSocket( url ) {
+	let ws = null;
+	let attempts = 0;
+	const messageListeners = new Set();
 
-socket.onopen  = () => console.log( "SocketBox connected" );
-socket.onerror = ( err ) => console.error( "SocketBox error", err );
-socket.onclose = () => console.log( "SocketBox closed" );
+	function connect() {
+		ws = new WebSocket( url );
+		ws.onopen  = () => { attempts = 0; console.log( "SocketBox connected" ); };
+		ws.onerror = ( err ) => console.error( "SocketBox error", err );
+		ws.onclose = () => {
+			const delay = Math.min( 30000, 1000 * 2 ** attempts++ );
+			console.log( `SocketBox closed — reconnecting in ${ delay }ms` );
+			setTimeout( connect, delay );
+		};
+		messageListeners.forEach( ( fn ) => ws.addEventListener( "message", fn ) );
+	}
+
+	connect();
+
+	return {
+		addEventListener( type, fn ) {
+			if ( type === "message" ) messageListeners.add( fn );
+			ws.addEventListener( type, fn );
+		},
+		removeEventListener( type, fn ) {
+			messageListeners.delete( fn );
+			ws.removeEventListener( type, fn );
+		},
+		send( data ) {
+			if ( ws.readyState === WebSocket.OPEN ) ws.send( data );
+		}
+	};
+}
+
+const socket = createReconnectingSocket( "/ws" );
 
 // ── Shared game state (combat encounter fills this in) ────────────────────────
 
@@ -304,12 +338,18 @@ const App = {
 	setup() {
 		const route        = VueRouter.useRoute();
 		const router       = VueRouter.useRouter();
-		const hasCharacter = Vue.computed( () => !!localStorage.getItem( "charId" ) );
+		// localStorage isn't reactive, so a computed over it evaluates once and
+		// never updates — re-check on every navigation instead, so the nav
+		// links appear as soon as a first character is picked.
+		const hasCharacter = ref( !!localStorage.getItem( "charId" ) );
 		const mobileNavOpen = ref( false );
 
 		// Collapse the mobile menu on every navigation instead of requiring
 		// a close handler on each individual link/router-link.
-		Vue.watch( () => route.path, () => { mobileNavOpen.value = false; } );
+		Vue.watch( () => route.path, () => {
+			mobileNavOpen.value = false;
+			hasCharacter.value  = !!localStorage.getItem( "charId" );
+		} );
 
 		onMounted( async () => {
 			const result = await api( "/api/auth.bxm" );

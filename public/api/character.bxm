@@ -1,7 +1,7 @@
 <bx:header name="Content-Type" value="application/json">
 <bx:script>
 
-	auth = new models.AuthService();
+	auth = application.authService;
 	userId = auth.currentUserId();
 </bx:script>
 <bx:if !userId>
@@ -10,7 +10,7 @@
 </bx:if>
 <bx:script>
 
-	characterService = new models.CharacterService();
+	characterService = application.characterService;
 	charId = url.id;
 </bx:script>
 <bx:if !auth.ownsCharacter( userId, charId )>

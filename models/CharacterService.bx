@@ -242,6 +242,18 @@ class singleton {
 		species = "", background = "", alignment = "", level = 1,
 		knownCantrip = "", knownSpell = "", choiceAbilities = [], classSkills = [], fightingStyle = ""
 	) {
+		arguments.name = trim( arguments.name );
+		if ( !len( arguments.name ) || len( arguments.name ) > 50 ) {
+			throw( type = "InvalidCharacter", message = "Character name must be 1-50 characters." );
+		}
+		// Pre-racial-bonus scores: 3-18 covers both point-buy and 3d6/4d6 rolls.
+		var rawScores = { "str": arguments.str, "dex": arguments.dex, "con": arguments.con, "int": arguments.intScore, "wis": arguments.wis, "cha": arguments.cha };
+		for ( var ability in rawScores ) {
+			if ( !isNumeric( rawScores[ ability ] ) || rawScores[ ability ] < 3 || rawScores[ ability ] > 18 ) {
+				throw( type = "InvalidCharacter", message = "Ability scores must be between 3 and 18." );
+			}
+		}
+
 		var classRows = queryExecute(
 			"SELECT hit_die FROM classes WHERE id = :classId",
 			{ "classId": arguments.classId },
@@ -295,10 +307,10 @@ class singleton {
 				"knownSpell": len( arguments.knownSpell ) ? arguments.knownSpell : javaCast( "null", 0 ),
 				"chosenSkillProficiencies": arguments.classSkills.len() ? arrayToList( arguments.classSkills, "," ) : javaCast( "null", 0 )
 			},
-			{ datasource: "gameserver", result: "insertResult" }
+			{ datasource: "gameserver", result: "local.insertResult" }
 		);
 
-		var characterId = insertResult.generatedKey;
+		var characterId = local.insertResult.generatedKey;
 		assignStartingEquipment( characterId );
 		_grantLevelOneClassFeatures( characterId, arguments.classId );
 		if ( len( arguments.fightingStyle ) && classFightingStyleAtCreation( arguments.classId ) ) {

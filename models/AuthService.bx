@@ -17,21 +17,22 @@ class singleton {
 			throw( type = "InvalidPassword", message = "Password must be at least 8 characters." );
 		}
 
-		var existing = queryExecute(
-			"SELECT id FROM users WHERE username = :username",
-			{ "username": cleanUsername }, { datasource: "gameserver" }
-		);
-		if ( existing.recordCount > 0 ) {
-			throw( type = "UsernameTaken", message = "That username is already taken." );
+		// The uq_users_username unique index is the real duplicate guard —
+		// a pre-check SELECT would still race a concurrent registration.
+		try {
+			queryExecute(
+				"INSERT INTO users (username, password_hash) VALUES (:username, :passwordHash)",
+				{ "username": cleanUsername, "passwordHash": _hashPassword( arguments.password ) },
+				{ datasource: "gameserver", result: "local.insertResult" }
+			);
+		} catch ( database e ) {
+			if ( findNoCase( "Duplicate entry", e.message & " " & ( e.detail ?: "" ) ) ) {
+				throw( type = "UsernameTaken", message = "That username is already taken." );
+			}
+			rethrow;
 		}
 
-		queryExecute(
-			"INSERT INTO users (username, password_hash) VALUES (:username, :passwordHash)",
-			{ "username": cleanUsername, "passwordHash": _hashPassword( arguments.password ) },
-			{ datasource: "gameserver", result: "insertResult" }
-		);
-
-		var userId = insertResult.generatedKey;
+		var userId = local.insertResult.generatedKey;
 		_startSession( userId, cleanUsername );
 		return userId;
 	}
@@ -51,8 +52,7 @@ class singleton {
 	}
 
 	function logout() {
-		structDelete( session, "userId" );
-		structDelete( session, "username" );
+		sessionInvalidate();
 	}
 
 	function currentUserId() {
@@ -88,6 +88,9 @@ class singleton {
 	}
 
 	private function _startSession( userId, username ) {
+		// Rotate the session ID on privilege change so a pre-login session ID
+		// planted by an attacker (session fixation) never becomes authenticated.
+		sessionRotate();
 		session.userId   = arguments.userId;
 		session.username = arguments.username;
 	}

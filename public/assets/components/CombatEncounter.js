@@ -395,7 +395,7 @@ const CombatEncounter = {
 					mapDecs.value   = msg.mapDecorations ?? [];
 					mapWidth.value  = msg.mapWidth  ?? mapWidth.value;
 					mapHeight.value = msg.mapHeight ?? mapHeight.value;
-					mapPois.value   = msg.mapPois   ?? [];
+					mapPois.value   = msg.gridPois  ?? [];
 				}
 			}
 		}
@@ -426,7 +426,9 @@ const CombatEncounter = {
 				autoBattling:          data.autoBattling          ?? cs.autoBattling,
 				gridPois:              data.gridPois              ?? cs.gridPois
 			} );
-			if ( data.mapPois ) mapPois.value = data.mapPois;
+			// Broadcasts carry POIs only as gridPois; the initial /api/combat.bxm
+			// response also sends them as mapPois but the two are identical.
+			if ( data.gridPois ) mapPois.value = data.gridPois;
 		}
 
 		function ws( type, extra = {} ) {

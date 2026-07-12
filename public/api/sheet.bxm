@@ -1,7 +1,7 @@
 <bx:header name="Content-Type" value="application/json">
 <bx:script>
 
-	auth = new models.AuthService();
+	auth = application.authService;
 	userId = auth.currentUserId();
 </bx:script>
 <bx:if !userId>
@@ -10,8 +10,8 @@
 </bx:if>
 <bx:script>
 
-	characterService = new models.CharacterService();
-	combatService = new models.CombatService();
+	characterService = application.characterService;
+	combatService = application.combatService;
 
 	if ( cgi.request_method == "GET" ) {
 		charId = url.id;

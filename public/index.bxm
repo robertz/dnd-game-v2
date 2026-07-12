@@ -11,8 +11,10 @@
 	<link href="https://fonts.googleapis.com/css2?family=Cinzel+Decorative:wght@700;900&family=IM+Fell+English:ital@0;1&display=swap" rel="stylesheet">
 
 	<bx:output><link rel="stylesheet" href="/assets/game.css?v=#application.assetVersion#"></bx:output>
-	<script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
-	<script src="https://unpkg.com/vue-router@4/dist/vue-router.global.prod.js"></script>
+	<!-- Pinned + SRI so a new upstream release (or CDN compromise) can't ship
+	     unvetted code to every client; bump version and hash together. -->
+	<script src="https://unpkg.com/vue@3.5.39/dist/vue.global.prod.js" integrity="sha384-yrrm1s9PCS0I4n39ldjMqQlTorYls89GAS3wXVJooje/BSWnC2vTgky2LIyzRLEo" crossorigin="anonymous"></script>
+	<script src="https://unpkg.com/vue-router@4.6.4/dist/vue-router.global.prod.js" integrity="sha384-A4bHjHQxfxIvuD8PBtwmSWs3Iu2iAYs4ay5uVK2xBRObO41s5ZQF3016uyadsK/V" crossorigin="anonymous"></script>
 </head>
 <body>
 	<div id="app"></div>

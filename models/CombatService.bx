@@ -322,10 +322,39 @@ class singleton {
 		arguments.state.activePlayerIndex = arguments.newIndex;
 		var incoming = arguments.state.players[ arguments.newIndex ];
 		arguments.state.player = incoming;
-		arguments.state.movementRemaining   = structKeyExists( incoming, "movementRemaining" )   ? incoming.movementRemaining   : max( 0, int( incoming.speed / 5 ) );
-		arguments.state.actionUsed          = structKeyExists( incoming, "actionUsed" )          ? incoming.actionUsed          : false;
-		arguments.state.bonusActionUsed     = structKeyExists( incoming, "bonusActionUsed" )     ? incoming.bonusActionUsed     : false;
-		arguments.state.attacksUsedThisTurn = structKeyExists( incoming, "attacksUsedThisTurn" ) ? incoming.attacksUsedThisTurn : 0;
+		arguments.state.movementRemaining   = incoming.movementRemaining;
+		arguments.state.actionUsed          = incoming.actionUsed;
+		arguments.state.bonusActionUsed     = incoming.bonusActionUsed;
+		arguments.state.attacksUsedThisTurn = incoming.attacksUsedThisTurn;
+	}
+
+	/**
+	 * Initializes the per-turn economy fields on a freshly loaded party
+	 * member so switchActivePlayer()/memberHasActionsLeft() can read them
+	 * without existence checks. Called once per member at encounter build.
+	 */
+	function initMemberEconomy( member ) {
+		arguments.member.movementRemaining   = max( 0, int( arguments.member.speed / 5 ) );
+		arguments.member.actionUsed          = false;
+		arguments.member.bonusActionUsed     = false;
+		arguments.member.attacksUsedThisTurn = 0;
+	}
+
+	/**
+	 * Whether one party member still has action economy to spend this round.
+	 * The active member's live economy is the top-level scratch fields, not
+	 * their own struct (see switchActivePlayer()) — a downed member has
+	 * nothing to spend.
+	 */
+	function memberHasActionsLeft( state, idx ) {
+		var member = arguments.state.players[ arguments.idx ];
+		if ( member.hitPoints <= 0 ) {
+			return false;
+		}
+		var isActive    = ( arguments.idx == arguments.state.activePlayerIndex );
+		var actionUsed  = isActive ? arguments.state.actionUsed          : member.actionUsed;
+		var attacksUsed = isActive ? arguments.state.attacksUsedThisTurn : member.attacksUsedThisTurn;
+		return !actionUsed || attacksUsed < attacksPerTurn( member );
 	}
 
 	/**
@@ -338,18 +367,69 @@ class singleton {
 	 */
 	function allPlayersExhausted( state ) {
 		for ( var i = 1; i <= arguments.state.players.len(); i++ ) {
-			var member = arguments.state.players[ i ];
-			if ( member.hitPoints <= 0 ) {
-				continue;
-			}
-			var isActive = ( i == arguments.state.activePlayerIndex );
-			var actionUsed          = isActive ? arguments.state.actionUsed          : ( structKeyExists( member, "actionUsed" )          ? member.actionUsed          : false );
-			var attacksUsedThisTurn = isActive ? arguments.state.attacksUsedThisTurn : ( structKeyExists( member, "attacksUsedThisTurn" ) ? member.attacksUsedThisTurn : 0 );
-			if ( !actionUsed || attacksUsedThisTurn < attacksPerTurn( member ) ) {
+			if ( memberHasActionsLeft( arguments.state, i ) ) {
 				return false;
 			}
 		}
 		return true;
+	}
+
+	/**
+	 * Builds the opponent roster for a freshly entered map — from its
+	 * authored spawn POIs when present, otherwise random monsters near the
+	 * map's default opponent spawn point. Shared by /api/combat.bxm's
+	 * initial encounter build and WebSocket.bx's map transitions so the two
+	 * can't drift. Appends every placed position to `takenPositions` in
+	 * place; every returned mob has `mobIndex` set and `visible` false.
+	 */
+	function buildOpponentsForMap( map, level, takenPositions ) {
+		var opponents = [];
+		var spawnPois = arguments.map.pois.filter( function( p ) { return p.type == "spawn"; } );
+
+		if ( spawnPois.len() == 0 ) {
+			opponents = randomMonstersForLevel( arguments.level, randRange( 2, 3 ) );
+			var positions = randomOpenTilesNear( arguments.map, arguments.map.opponentSpawn, 5, opponents.len(), arguments.takenPositions );
+			for ( var i = 1; i <= opponents.len(); i++ ) {
+				opponents[ i ].position = ( i <= positions.len() ) ? positions[ i ] : { "x": arguments.map.opponentSpawn.x, "y": arguments.map.opponentSpawn.y };
+				arguments.takenPositions.append( opponents[ i ].position );
+			}
+		} else {
+			for ( var spawnPoi in spawnPois ) {
+				var payload    = spawnPoi.payload;
+				var spawnCount = ( payload.countMode == "random" )
+					? randRange( payload.countMin, payload.countMax )
+					: payload.count;
+				if ( spawnCount < 1 ) {
+					continue;
+				}
+				var mobs = [];
+				if ( payload.monsterMode == "specific" && len( payload.monsterName ?: "" ) ) {
+					var template = monsterByName( payload.monsterName );
+					for ( var j = 1; j <= spawnCount; j++ ) {
+						mobs.append( duplicate( template ) );
+					}
+				} else {
+					mobs = randomMonstersForLevel( arguments.level, spawnCount );
+				}
+				var positions = randomOpenTilesNear( arguments.map, { "x": spawnPoi.x, "y": spawnPoi.y }, 5, mobs.len(), arguments.takenPositions );
+				for ( var k = 1; k <= mobs.len(); k++ ) {
+					mobs[ k ].position = ( k <= positions.len() ) ? positions[ k ] : { "x": spawnPoi.x, "y": spawnPoi.y };
+					arguments.takenPositions.append( mobs[ k ].position );
+					opponents.append( mobs[ k ] );
+				}
+			}
+			if ( opponents.len() == 0 ) {
+				opponents = randomMonstersForLevel( arguments.level, 1 );
+				opponents[ 1 ].position = { "x": spawnPois[ 1 ].x, "y": spawnPois[ 1 ].y };
+				arguments.takenPositions.append( opponents[ 1 ].position );
+			}
+		}
+
+		for ( var i = 1; i <= opponents.len(); i++ ) {
+			opponents[ i ].mobIndex = i;
+			opponents[ i ].visible  = false;
+		}
+		return opponents;
 	}
 
 	/**

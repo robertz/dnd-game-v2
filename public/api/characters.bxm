@@ -1,7 +1,7 @@
 <bx:header name="Content-Type" value="application/json">
 <bx:script>
 
-	auth = new models.AuthService();
+	auth = application.authService;
 	userId = auth.currentUserId();
 </bx:script>
 <bx:if !userId>
@@ -10,32 +10,41 @@
 </bx:if>
 <bx:script>
 
-	characterService = new models.CharacterService();
+	characterService = application.characterService;
 
 	if ( cgi.request_method == "POST" ) {
 		body = jsonDeserialize( getHttpRequestData().content );
-		charId = characterService.createCharacter(
-			ownerUserId     = userId,
-			name            = body.name,
-			classId         = body.classId,
-			str             = body.str,
-			dex             = body.dex,
-			con             = body.con,
-			intScore        = body[ "int" ],
-			wis             = body.wis,
-			cha             = body.cha,
-			species         = body.species,
-			background      = body.background,
-			alignment       = body.alignment,
-			knownCantrip    = body.knownCantrip ?: "",
-			knownSpell      = body.knownSpell ?: "",
-			choiceAbilities = body.choiceAbilities ?: [],
-			classSkills     = body.classSkills ?: [],
-			fightingStyle   = body.fightingStyle ?: ""
-		);
+		try {
+			charId = characterService.createCharacter(
+				ownerUserId     = userId,
+				name            = body.name,
+				classId         = body.classId,
+				str             = body.str,
+				dex             = body.dex,
+				con             = body.con,
+				intScore        = body[ "int" ],
+				wis             = body.wis,
+				cha             = body.cha,
+				species         = body.species,
+				background      = body.background,
+				alignment       = body.alignment,
+				knownCantrip    = body.knownCantrip ?: "",
+				knownSpell      = body.knownSpell ?: "",
+				choiceAbilities = body.choiceAbilities ?: [],
+				classSkills     = body.classSkills ?: [],
+				fightingStyle   = body.fightingStyle ?: ""
+			);
+		} catch ( any e ) {
+			if ( e.type != "InvalidCharacter" && e.type != "ClassNotFound" ) {
+				rethrow;
+			}
+			bx:header statuscode="400" statustext="Bad Request";
+			writeOutput( jsonSerialize( { "error": e.message } ) );
+			return;
+		}
 		writeOutput( jsonSerialize( { "id": charId } ) );
 	} else {
-		combatService = new models.CombatService();
+		combatService = application.combatService;
 		rows = characterService.listSavedCharacters( userId );
 		result = [];
 		for ( row in rows ) {

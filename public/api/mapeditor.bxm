@@ -1,7 +1,7 @@
 <bx:header name="Content-Type" value="application/json">
 <bx:script>
 
-	auth = new models.AuthService();
+	auth = application.authService;
 	userId = auth.currentUserId();
 </bx:script>
 <bx:if !userId>
@@ -10,8 +10,8 @@
 </bx:if>
 <bx:script>
 
-	mapService = new models.MapService();
-	combatService = new models.CombatService();
+	mapService = application.mapService;
+	combatService = application.combatService;
 
 	if ( cgi.request_method == "GET" ) {
 		listFlag = url.list ?: "";

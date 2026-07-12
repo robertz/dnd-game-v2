@@ -12,7 +12,18 @@ class extends="modules.socketbox.models.WebSocketCore" {
 	}
 
 	public function onMessage( required message, required channel ) {
-		var data  = jsonDeserialize( message );
+		var data = "";
+		try {
+			data = jsonDeserialize( message );
+		} catch ( any e ) {
+			sendMessage( jsonSerialize( { "type": "error", "message": "Malformed message" } ), channel );
+			return;
+		}
+		if ( !isStruct( data ) || !structKeyExists( data, "type" ) || !structKeyExists( data, "encounterKey" ) ) {
+			sendMessage( jsonSerialize( { "type": "error", "message": "Malformed message" } ), channel );
+			return;
+		}
+
 		var state = application.encounters[ data.encounterKey ] ?: "";
 
 		if ( isSimpleValue( state ) ) {
@@ -26,9 +37,26 @@ class extends="modules.socketbox.models.WebSocketCore" {
 			return;
 		}
 
-		var combatService    = new models.CombatService();
-		var characterService = new models.CharacterService();
-		var mapService       = new models.MapService();
+		// Serialize concurrent messages against the same encounter (e.g. a
+		// double-clicked action button) — every handler mutates `state` in
+		// place with no synchronization of its own.
+		bx:lock name="encounter-#data.encounterKey#" type="exclusive" timeout="10" {
+			try {
+				_dispatch( state, data );
+			} catch ( any e ) {
+				sendMessage( jsonSerialize( { "type": "error", "message": "Action failed: #e.message#" } ), channel );
+				return;
+			}
+			state.lastTouched = now();
+			application.encounters[ data.encounterKey ] = state;
+			sendMessage( jsonSerialize( _buildBroadcast( state, application.combatService ) ), channel );
+		}
+	}
+
+	private function _dispatch( state, data ) {
+		var combatService    = application.combatService;
+		var characterService = application.characterService;
+		var mapService       = application.mapService;
 
 		switch ( data.type ) {
 			case "move":
@@ -108,8 +136,6 @@ class extends="modules.socketbox.models.WebSocketCore" {
 		if ( state.log.len() > 100 ) {
 			state.log = arraySlice( state.log, 1, 100 );
 		}
-		application.encounters[ data.encounterKey ] = state;
-		sendMessage( jsonSerialize( _buildBroadcast( state, combatService ) ), channel );
 	}
 
 	public function onClose( required channel ) {
@@ -119,6 +145,32 @@ class extends="modules.socketbox.models.WebSocketCore" {
 	}
 
 	// ── Private helpers ───────────────────────────────────────────────────────
+
+	/**
+	 * Shared precondition for the player-turn action handlers: it must be the
+	 * player's turn, the active member alive and not incapacitated, and the
+	 * relevant piece of action economy still available. Handlers with genuinely
+	 * different rules (_handleMove's cantMove, _handleUseItem's pre-initiative
+	 * allowance) keep their own guards.
+	 */
+	private boolean function _canAct( state, requireInitiative = true, requireActionFree = false, requireAttackLeft = false ) {
+		if ( arguments.state.gameOver || arguments.state.currentTurn != "player" || arguments.state.player.hitPoints <= 0 ) {
+			return false;
+		}
+		if ( arguments.requireInitiative && !arguments.state.initiativeRolled ) {
+			return false;
+		}
+		if ( arguments.requireActionFree && arguments.state.actionUsed ) {
+			return false;
+		}
+		if ( application.combatService.isIncapacitated( arguments.state.player ) ) {
+			return false;
+		}
+		if ( arguments.requireAttackLeft && arguments.state.attacksUsedThisTurn >= application.combatService.attacksPerTurn( arguments.state.player ) ) {
+			return false;
+		}
+		return true;
+	}
 
 	private function _handleMove( state, data, combatService, characterService, mapService ) {
 		if (
@@ -162,11 +214,7 @@ class extends="modules.socketbox.models.WebSocketCore" {
 	}
 
 	private function _handleAttack( state, data, combatService ) {
-		if (
-			arguments.state.gameOver || !arguments.state.initiativeRolled || arguments.state.currentTurn != "player" ||
-			arguments.state.player.hitPoints <= 0 || arguments.combatService.isIncapacitated( arguments.state.player ) ||
-			arguments.state.attacksUsedThisTurn >= arguments.combatService.attacksPerTurn( arguments.state.player )
-		) {
+		if ( !_canAct( state = arguments.state, requireAttackLeft = true ) ) {
 			return;
 		}
 
@@ -198,11 +246,7 @@ class extends="modules.socketbox.models.WebSocketCore" {
 	}
 
 	private function _handleCastCantrip( state, data, combatService ) {
-		if (
-			arguments.state.gameOver || !arguments.state.initiativeRolled || arguments.state.currentTurn != "player" ||
-			arguments.state.actionUsed || arguments.state.player.hitPoints <= 0 ||
-			arguments.combatService.isIncapacitated( arguments.state.player )
-		) {
+		if ( !_canAct( state = arguments.state, requireActionFree = true ) ) {
 			return;
 		}
 		arguments.state.opponent = arguments.state.opponents[ arguments.state.selectedOpponentIndex ];
@@ -214,11 +258,7 @@ class extends="modules.socketbox.models.WebSocketCore" {
 	}
 
 	private function _handleCastSpell( state, data, combatService ) {
-		if (
-			arguments.state.gameOver || !arguments.state.initiativeRolled || arguments.state.currentTurn != "player" ||
-			arguments.state.actionUsed || arguments.state.player.hitPoints <= 0 ||
-			arguments.combatService.isIncapacitated( arguments.state.player )
-		) {
+		if ( !_canAct( state = arguments.state, requireActionFree = true ) ) {
 			return;
 		}
 		arguments.state.opponent = arguments.state.opponents[ arguments.state.selectedOpponentIndex ];
@@ -235,11 +275,7 @@ class extends="modules.socketbox.models.WebSocketCore" {
 	}
 
 	private function _handleSmite( state, data, combatService ) {
-		if (
-			arguments.state.gameOver || !arguments.state.initiativeRolled || arguments.state.currentTurn != "player" ||
-			arguments.state.player.hitPoints <= 0 || arguments.combatService.isIncapacitated( arguments.state.player ) ||
-			arguments.state.attacksUsedThisTurn >= arguments.combatService.attacksPerTurn( arguments.state.player )
-		) {
+		if ( !_canAct( state = arguments.state, requireAttackLeft = true ) ) {
 			return;
 		}
 		arguments.state.opponent = arguments.state.opponents[ arguments.state.selectedOpponentIndex ];
@@ -256,21 +292,16 @@ class extends="modules.socketbox.models.WebSocketCore" {
 	}
 
 	private function _handleOffHandAttack( state, combatService ) {
-		if (
-			arguments.state.gameOver || !arguments.state.initiativeRolled || arguments.state.currentTurn != "player" ||
-			arguments.state.player.hitPoints <= 0 || arguments.combatService.isIncapacitated( arguments.state.player )
-		) {
+		// No requireActionFree: an off-hand attack is a Bonus Action —
+		// offHandAttack() enforces bonusActionUsed itself.
+		if ( !_canAct( arguments.state ) ) {
 			return;
 		}
 		arguments.combatService.offHandAttack( arguments.state );
 	}
 
 	private function _handleGrapple( state, combatService ) {
-		if (
-			arguments.state.gameOver || !arguments.state.initiativeRolled || arguments.state.currentTurn != "player" ||
-			arguments.state.actionUsed || arguments.state.player.hitPoints <= 0 ||
-			arguments.combatService.isIncapacitated( arguments.state.player )
-		) {
+		if ( !_canAct( state = arguments.state, requireActionFree = true ) ) {
 			return;
 		}
 		arguments.state.opponent = arguments.state.opponents[ arguments.state.selectedOpponentIndex ];
@@ -282,11 +313,7 @@ class extends="modules.socketbox.models.WebSocketCore" {
 	}
 
 	private function _handleShove( state, combatService ) {
-		if (
-			arguments.state.gameOver || !arguments.state.initiativeRolled || arguments.state.currentTurn != "player" ||
-			arguments.state.actionUsed || arguments.state.player.hitPoints <= 0 ||
-			arguments.combatService.isIncapacitated( arguments.state.player )
-		) {
+		if ( !_canAct( state = arguments.state, requireActionFree = true ) ) {
 			return;
 		}
 		arguments.state.opponent = arguments.state.opponents[ arguments.state.selectedOpponentIndex ];
@@ -298,11 +325,7 @@ class extends="modules.socketbox.models.WebSocketCore" {
 	}
 
 	private function _handleBreathWeapon( state, combatService ) {
-		if (
-			arguments.state.gameOver || !arguments.state.initiativeRolled || arguments.state.currentTurn != "player" ||
-			arguments.state.actionUsed || arguments.state.player.hitPoints <= 0 ||
-			arguments.combatService.isIncapacitated( arguments.state.player )
-		) {
+		if ( !_canAct( state = arguments.state, requireActionFree = true ) ) {
 			return;
 		}
 		arguments.state.opponent = arguments.state.opponents[ arguments.state.selectedOpponentIndex ];
@@ -317,10 +340,7 @@ class extends="modules.socketbox.models.WebSocketCore" {
 		if ( arguments.state.gameOver || arguments.state.player.hitPoints <= 0 ) {
 			return;
 		}
-		if (
-			arguments.state.initiativeRolled &&
-			( arguments.state.currentTurn != "player" || arguments.state.actionUsed || arguments.combatService.isIncapacitated( arguments.state.player ) )
-		) {
+		if ( arguments.state.initiativeRolled && !_canAct( state = arguments.state, requireActionFree = true ) ) {
 			return;
 		}
 		var index = -1;
@@ -347,20 +367,14 @@ class extends="modules.socketbox.models.WebSocketCore" {
 	}
 
 	private function _handleSecondWind( state, combatService ) {
-		if (
-			arguments.state.gameOver || !arguments.state.initiativeRolled || arguments.state.currentTurn != "player" ||
-			arguments.state.player.hitPoints <= 0 || arguments.combatService.isIncapacitated( arguments.state.player )
-		) {
+		if ( !_canAct( arguments.state ) ) {
 			return;
 		}
 		arguments.combatService.useSecondWind( arguments.state );
 	}
 
 	private function _handleStartRage( state, combatService ) {
-		if (
-			arguments.state.gameOver || !arguments.state.initiativeRolled || arguments.state.currentTurn != "player" ||
-			arguments.state.player.hitPoints <= 0 || arguments.combatService.isIncapacitated( arguments.state.player )
-		) {
+		if ( !_canAct( arguments.state ) ) {
 			return;
 		}
 		arguments.combatService.startRage( arguments.state );
@@ -435,14 +449,7 @@ class extends="modules.socketbox.models.WebSocketCore" {
 		var total = arguments.state.players.len();
 		for ( var offset = 1; offset <= total; offset++ ) {
 			var idx = ( ( arguments.state.activePlayerIndex - 1 + offset ) mod total ) + 1;
-			var member = arguments.state.players[ idx ];
-			if ( member.hitPoints <= 0 ) {
-				continue;
-			}
-			var isActive = ( idx == arguments.state.activePlayerIndex );
-			var actionUsed          = isActive ? arguments.state.actionUsed          : ( structKeyExists( member, "actionUsed" )          ? member.actionUsed          : false );
-			var attacksUsedThisTurn = isActive ? arguments.state.attacksUsedThisTurn : ( structKeyExists( member, "attacksUsedThisTurn" ) ? member.attacksUsedThisTurn : 0 );
-			if ( !actionUsed || attacksUsedThisTurn < arguments.combatService.attacksPerTurn( member ) ) {
+			if ( arguments.combatService.memberHasActionsLeft( arguments.state, idx ) ) {
 				arguments.combatService.switchActivePlayer( arguments.state, idx );
 				return;
 			}
@@ -508,9 +515,12 @@ class extends="modules.socketbox.models.WebSocketCore" {
 		arguments.state.autoBattling          = false;
 		for ( var member in arguments.state.players ) {
 			member.inCombat = false;
-			member.movementRemaining = max( 0, int( member.speed / 5 ) );
+			application.combatService.initMemberEconomy( member );
 		}
 		arguments.state.movementRemaining     = arguments.state.player.movementRemaining;
+		arguments.state.actionUsed            = false;
+		arguments.state.bonusActionUsed       = false;
+		arguments.state.attacksUsedThisTurn   = 0;
 		arguments.state.log                   = [ "The dungeon is cleared. You stand victorious." ];
 	}
 
@@ -638,47 +648,8 @@ class extends="modules.socketbox.models.WebSocketCore" {
 					: newMap.playerSpawn;
 				player.position = spawnOverride;
 
-				var spawnPois = newMap.pois.filter( function( p ) { return p.type == "spawn"; } );
-				var opponents = [];
 				var takenPos  = [ player.position ];
-
-				if ( spawnPois.len() == 0 ) {
-					opponents = arguments.combatService.randomMonstersForLevel( player.level, randRange( 2, 3 ) );
-					var positions = arguments.combatService.randomOpenTilesNear( newMap, newMap.opponentSpawn, 5, opponents.len(), takenPos );
-					for ( var i = 1; i <= opponents.len(); i++ ) {
-						opponents[ i ].position = ( i <= positions.len() ) ? positions[ i ] : { "x": newMap.opponentSpawn.x, "y": newMap.opponentSpawn.y };
-						opponents[ i ].mobIndex = i;
-						opponents[ i ].visible  = false;
-					}
-				} else {
-					for ( var spawnPoi in spawnPois ) {
-						var payload    = spawnPoi.payload;
-						var spawnCount = ( payload.countMode == "random" )
-							? randRange( payload.countMin, payload.countMax )
-							: payload.count;
-						if ( spawnCount < 1 ) { continue; }
-						var mobs = [];
-						if ( payload.monsterMode == "specific" && len( payload.monsterName ?: "" ) ) {
-							var tmpl = arguments.combatService.monsterByName( payload.monsterName );
-							for ( var j = 1; j <= spawnCount; j++ ) { mobs.append( duplicate( tmpl ) ); }
-						} else {
-							mobs = arguments.combatService.randomMonstersForLevel( player.level, spawnCount );
-						}
-						var positions = arguments.combatService.randomOpenTilesNear( newMap, { "x": spawnPoi.x, "y": spawnPoi.y }, 5, mobs.len(), takenPos );
-						for ( var k = 1; k <= mobs.len(); k++ ) {
-							mobs[ k ].position = ( k <= positions.len() ) ? positions[ k ] : { "x": spawnPoi.x, "y": spawnPoi.y };
-							mobs[ k ].visible  = false;
-							takenPos.append( mobs[ k ].position );
-							opponents.append( mobs[ k ] );
-						}
-					}
-					if ( opponents.len() == 0 ) {
-						opponents = arguments.combatService.randomMonstersForLevel( player.level, 1 );
-						opponents[ 1 ].position = { "x": spawnPois[ 1 ].x, "y": spawnPois[ 1 ].y };
-						opponents[ 1 ].visible  = false;
-					}
-					for ( var i = 1; i <= opponents.len(); i++ ) { opponents[ i ].mobIndex = i; }
-				}
+				var opponents = arguments.combatService.buildOpponentsForMap( newMap, player.level, takenPos );
 				arguments.state.opponents            = opponents;
 				arguments.state.opponent             = opponents[ 1 ];
 				arguments.state.selectedOpponentIndex = 1;
@@ -730,7 +701,6 @@ class extends="modules.socketbox.models.WebSocketCore" {
 		var payload = {
 			"type"                  : "state_update",
 			"playerDelta"           : _playerDelta( arguments.state ),
-			"players"               : arguments.state.players,
 			"activePlayerIndex"     : arguments.state.activePlayerIndex,
 			"opponents"             : arguments.combatService.opponentsForClient( arguments.state ),
 			"currentTurn"           : arguments.state.currentTurn,
@@ -751,9 +721,17 @@ class extends="modules.socketbox.models.WebSocketCore" {
 			"asiAbility1"           : arguments.state.asiAbility1,
 			"asiAbility2"           : arguments.state.asiAbility2,
 			"asiSelectedFeat"       : arguments.state.asiSelectedFeat,
-			"asiSelectedSkills"     : arguments.state.asiSelectedSkills,
-			"mapPois"               : arguments.state.gridPois
+			"asiSelectedSkills"     : arguments.state.asiSelectedSkills
 		};
+		// The full party array is only worth resending when something on it
+		// changed — the active member's own changes already ride playerDelta,
+		// but ally HP (heals, enemy attacks on allies) lives here. Same
+		// snapshot-compare approach as _playerDelta, whole-array granularity.
+		var playersSerialized = jsonSerialize( arguments.state.players );
+		if ( !structKeyExists( arguments.state, "_playersSnapshot" ) || arguments.state._playersSnapshot != playersSerialized ) {
+			payload[ "players" ] = arguments.state.players;
+			arguments.state._playersSnapshot = playersSerialized;
+		}
 		// The map grid is static per map and already cached client-side from
 		// the initial /api/combat.bxm load — resend it only right after a map
 		// transition (the one time it actually changes), instead of shipping

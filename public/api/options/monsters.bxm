@@ -1,12 +1,12 @@
 <bx:header name="Content-Type" value="application/json">
 <bx:script>
-	auth = new models.AuthService();
+	auth = application.authService;
 </bx:script>
 <bx:if !auth.currentUserId()>
 	<bx:header statuscode="401" statustext="Unauthorized">
 	<bx:script>writeOutput( jsonSerialize( { "error": "Unauthorized" } ) ); return;</bx:script>
 </bx:if>
 <bx:script>
-	combatService = new models.CombatService();
+	combatService = application.combatService;
 	writeOutput( jsonSerialize( combatService.listAllMonsterNames() ) );
 </bx:script>

@@ -1,7 +1,7 @@
 <bx:header name="Content-Type" value="application/json">
 <bx:script>
 
-	auth = new models.AuthService();
+	auth = application.authService;
 	userId = auth.currentUserId();
 </bx:script>
 <bx:if !userId>
@@ -33,9 +33,9 @@
 </bx:if>
 <bx:script>
 
-	combatService = new models.CombatService();
-	characterService = new models.CharacterService();
-	mapService = new models.MapService();
+	combatService = application.combatService;
+	characterService = application.characterService;
+	mapService = application.mapService;
 
 	players = [];
 	for ( id in charIds ) {
@@ -43,6 +43,7 @@
 		if ( member.hitPoints <= 0 ) {
 			combatService.longRest( member, true );
 		}
+		combatService.initMemberEconomy( member );
 		players.append( member );
 	}
 	player = players[ 1 ];
@@ -76,59 +77,7 @@
 		}
 	}
 
-	// Build opponent roster from spawn POIs if present, otherwise fall back to random.
-	spawnPois = map.pois.filter( function( p ) { return p.type == "spawn"; } );
-
-	if ( spawnPois.len() == 0 ) {
-		opponents = combatService.randomMonstersForLevel( averageLevel, randRange( 2, 3 ) );
-		positions = combatService.randomOpenTilesNear( map, map.opponentSpawn, 5, opponents.len(), takenPositions );
-		for ( i = 1; i <= opponents.len(); i++ ) {
-			opponents[ i ].position = ( i <= positions.len() ) ? positions[ i ] : { "x": map.opponentSpawn.x, "y": map.opponentSpawn.y };
-			opponents[ i ].mobIndex = i;
-			opponents[ i ].visible  = false;
-		}
-	} else {
-		opponents = [];
-
-		for ( spawnPoi in spawnPois ) {
-			payload = spawnPoi.payload;
-			spawnCount = ( payload.countMode == "random" )
-				? randRange( payload.countMin, payload.countMax )
-				: payload.count;
-
-			if ( spawnCount < 1 ) {
-				continue;
-			}
-
-			if ( payload.monsterMode == "specific" && len( payload.monsterName ?: "" ) ) {
-				template = combatService.monsterByName( payload.monsterName );
-				mobs = [];
-				for ( j = 1; j <= spawnCount; j++ ) {
-					mobs.append( duplicate( template ) );
-				}
-			} else {
-				mobs = combatService.randomMonstersForLevel( averageLevel, spawnCount );
-			}
-
-			positions = combatService.randomOpenTilesNear( map, { "x": spawnPoi.x, "y": spawnPoi.y }, 5, mobs.len(), takenPositions );
-			for ( k = 1; k <= mobs.len(); k++ ) {
-				mobs[ k ].position = ( k <= positions.len() ) ? positions[ k ] : { "x": spawnPoi.x, "y": spawnPoi.y };
-				mobs[ k ].visible  = false;
-				takenPositions.append( mobs[ k ].position );
-				opponents.append( mobs[ k ] );
-			}
-		}
-
-		if ( opponents.len() == 0 ) {
-			opponents = combatService.randomMonstersForLevel( averageLevel, 1 );
-			opponents[ 1 ].position = { "x": spawnPois[ 1 ].x, "y": spawnPois[ 1 ].y };
-			opponents[ 1 ].visible  = false;
-		}
-
-		for ( i = 1; i <= opponents.len(); i++ ) {
-			opponents[ i ].mobIndex = i;
-		}
-	}
+	opponents = combatService.buildOpponentsForMap( map, averageLevel, takenPositions );
 
 	// Set initial visibility via line-of-sight so mobs in range appear in the
 	// sidebar immediately — a mob is visible if any party member can see it.
@@ -191,6 +140,16 @@
 	if ( !structKeyExists( application, "encounters" ) ) {
 		application.encounters = {};
 	}
+	// Encounters otherwise live forever in application scope — sweep any not
+	// touched in 4+ hours (WebSocket.bx stamps lastTouched on every message)
+	// so abandoned sessions don't accumulate for the server's lifetime.
+	for ( staleKey in structKeyArray( application.encounters ) ) {
+		staleState = application.encounters[ staleKey ];
+		if ( dateDiff( "h", staleState.lastTouched ?: now(), now() ) >= 4 ) {
+			structDelete( application.encounters, staleKey );
+		}
+	}
+	state.lastTouched = now();
 	application.encounters[ encounterKey ] = state;
 
 	writeOutput( jsonSerialize( {
