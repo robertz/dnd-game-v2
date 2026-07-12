@@ -525,34 +525,39 @@ class extends="modules.socketbox.models.WebSocketCore" {
 	}
 
 	private function _handleShortRest( state, data, combatService ) {
-		var player = arguments.state.player;
-		if ( structKeyExists( player, "inCombat" ) && player.inCombat ) {
+		// member.inCombat is set uniformly across the whole party by
+		// _updateCombatState() — checking the active player's flag is
+		// equivalent to checking any member's.
+		if ( structKeyExists( arguments.state.player, "inCombat" ) && arguments.state.player.inCombat ) {
 			return;
 		}
 		var diceCount = val( arguments.data.diceCount ?: 1 );
-		var maxDice   = max( 0, player.hitDiceMax - player.hitDiceSpent );
-		diceCount = max( 0, min( diceCount, maxDice ) );
-		var result = arguments.combatService.shortRest( player, diceCount );
-		if ( result.rolls.len() ) {
-			var sign = result.conMod >= 0 ? "+" : "";
-			var rollList = arrayToList( result.rolls.map( function( r ) { return "#r##sign##result.conMod#"; } ), " + " );
-			arguments.state.log.prepend( "#player.name# takes a Short Rest, spending #result.rolls.len()# Hit Die#( result.rolls.len() == 1 ? '' : 'ce' )#: #rollList# = +#result.healing# HP (#player.hitPoints#/#player.maxHitPoints# HP)." );
-		} else {
-			arguments.state.log.prepend( "#player.name# takes a Short Rest." );
+		for ( var member in arguments.state.players ) {
+			var maxDice = max( 0, member.hitDiceMax - member.hitDiceSpent );
+			var memberDiceCount = max( 0, min( diceCount, maxDice ) );
+			var result = arguments.combatService.shortRest( member, memberDiceCount );
+			if ( result.rolls.len() ) {
+				var sign = result.conMod >= 0 ? "+" : "";
+				var rollList = arrayToList( result.rolls.map( function( r ) { return "#r##sign##result.conMod#"; } ), " + " );
+				arguments.state.log.prepend( "#member.name# takes a Short Rest, spending #result.rolls.len()# Hit Die#( result.rolls.len() == 1 ? '' : 'ce' )#: #rollList# = +#result.healing# HP (#member.hitPoints#/#member.maxHitPoints# HP)." );
+			} else {
+				arguments.state.log.prepend( "#member.name# takes a Short Rest." );
+			}
 		}
 	}
 
 	private function _handleLongRest( state, combatService ) {
-		var player = arguments.state.player;
-		if ( structKeyExists( player, "inCombat" ) && player.inCombat ) {
+		if ( structKeyExists( arguments.state.player, "inCombat" ) && arguments.state.player.inCombat ) {
 			return;
 		}
-		var result = arguments.combatService.longRest( player );
-		if ( !result.success ) {
-			arguments.state.log.prepend( "#player.name# can't take another Long Rest yet — about #result.hoursUntilNext# more hour#( result.hoursUntilNext == 1 ? '' : 's' )# of in-game time needed." );
-			return;
+		for ( var member in arguments.state.players ) {
+			var result = arguments.combatService.longRest( member );
+			if ( !result.success ) {
+				arguments.state.log.prepend( "#member.name# can't take another Long Rest yet — about #result.hoursUntilNext# more hour#( result.hoursUntilNext == 1 ? '' : 's' )# of in-game time needed." );
+			} else {
+				arguments.state.log.prepend( "#member.name# takes a Long Rest — fully restored (#member.maxHitPoints#/#member.maxHitPoints# HP). All spell slots and other resources recovered." );
+			}
 		}
-		arguments.state.log.prepend( "#player.name# takes a Long Rest — fully restored (#player.maxHitPoints#/#player.maxHitPoints# HP). All spell slots and other resources recovered." );
 	}
 
 	private function _updateCombatState( state, combatService ) {
