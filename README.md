@@ -38,8 +38,18 @@ no frontend build step.
 models/                  BoxLang service classes (business logic + SQL)
   AuthService.bx          Login/register, password hashing, ownership checks
   CharacterService.bx      Character creation, inventory, sheet data
-  CombatService.bx        Combat rules engine (attacks, spells, conditions, leveling)
+  CombatService.bx        Facade over the combat engine — delegates to models/combat/
   MapService.bx           Map/tile storage, editor persistence, geometry decode
+  combat/                  Combat engine, split into focused services:
+    DiceService.bx           Dice notation parsing and rolling
+    RulesService.bx          Ability/proficiency math, skills, species traits
+    GridService.bx           Pathfinding, line of sight, walkability
+    MonsterLibrary.bx        Stat-block parsing, rosters, spawn building
+    SpellcastingService.bx   Caster classes, spell slots, spell lookups
+    ProgressionService.bx    XP/level-ups, ASI, feats, multiclassing
+    CharacterStateService.bx Character load/save, short/long rests
+    CombatActionsService.bx  Attack resolution, action economy, conditions
+    EnemyAIService.bx        Enemy turns, aggro, legendary actions, auto-battle
 
 public/
   Application.bx           App-level config (session, datasource, cache-busting)
