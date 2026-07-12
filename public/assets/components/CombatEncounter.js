@@ -741,8 +741,33 @@ const CombatEncounter = {
 			return Math.max( 0, total - (cs.attacksUsedThisTurn ?? 0) );
 		} );
 
+		// Mirrors CombatActionsService.bx's offHandWeapon(): the main equipped
+		// melee weapon must have the Light property, and there must be a second
+		// Light melee weapon available — either a distinct one, or the same
+		// item carried in quantity 2+ (e.g. a pair of daggers).
+		function offHandWeapon( player ) {
+			const inventory = player?.inventory ?? [];
+			const mainMelee = inventory.find( ( i ) => i.category === "melee" && i.equipped );
+			if ( !mainMelee || !( mainMelee.properties ?? [] ).includes( "Light" ) ) return null;
+			for ( const item of inventory ) {
+				if ( !( item.properties ?? [] ).includes( "Light" ) ) continue;
+				if ( item.id === mainMelee.id ) {
+					if ( ( item.quantity ?? 0 ) >= 2 ) return item;
+					continue;
+				}
+				return item;
+			}
+			return null;
+		}
+
 		const canOffHandAttack = computed( () => {
-			if ( cs.bonusActionUsed ) return false;
+			if ( !offHandWeapon( cs.player ) ) return false;
+			// Weapon Mastery — Nick: once per turn, the off-hand attack doesn't
+			// cost the bonus action, so it's still available even after the
+			// bonus action is otherwise spent.
+			const mainWeapon = ( cs.player?.inventory ?? [] ).find( ( i ) => i.category === "melee" && i.equipped );
+			const usesNick = mainWeapon?.mastery === "Nick" && playerHasFeature( "Weapon Mastery" ) && !cs.player.usedNickThisTurn;
+			if ( !usesNick && cs.bonusActionUsed ) return false;
 			return true;
 		} );
 
