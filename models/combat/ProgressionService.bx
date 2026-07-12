@@ -1213,16 +1213,20 @@ class singleton {
 		}
 
 		var knownNames = len( charRow.known_cantrips[ 1 ] ) ? listToArray( charRow.known_cantrips[ 1 ] ) : [];
-		var pending = knownNames.len() < expectedCantripCount( charRow.level[ 1 ] );
+		var underExpectedCount = knownNames.len() < expectedCantripCount( charRow.level[ 1 ] );
 		var availableCantrips = [];
-		if ( pending ) {
+		if ( underExpectedCount ) {
 			for ( var cantrip in variables.spellcasting.listCastableSpells( charRow.className[ 1 ], 0 ) ) {
 				if ( arrayFindNoCase( knownNames, cantrip.name ) == 0 ) {
 					availableCantrips.append( cantrip );
 				}
 			}
 		}
-		return { "pending": pending, "availableCantrips": availableCantrips };
+		// A class whose cantrip list (in this dataset) is thinner than the
+		// leveling table expects (e.g. Cleric has only one mechanically-modeled
+		// cantrip today) would otherwise report "pending" forever with nothing
+		// to actually pick — a dead-end picker with no way to resolve it.
+		return { "pending": underExpectedCount && availableCantrips.len() > 0, "availableCantrips": availableCantrips };
 	}
 
 	/**
@@ -1290,15 +1294,20 @@ class singleton {
 				knownAtMaxLevel += 1;
 			}
 		}
-		var pending = knownAtMaxLevel == 0;
+		var underExpectedCount = knownAtMaxLevel == 0;
 		var availableSpells = [];
-		if ( pending ) {
+		if ( underExpectedCount ) {
 			for ( var spell in availableSpellsByLevel ) {
 				if ( arrayFindNoCase( knownNames, spell.name ) == 0 ) {
 					availableSpells.append( spell );
 				}
 			}
 		}
+		// A class/level combination with no mechanically-modeled spells at
+		// all (a real content gap in this dataset — several classes are
+		// missing coverage at some slot levels) would otherwise report
+		// "pending" forever with nothing to actually pick.
+		var pending = underExpectedCount && availableSpells.len() > 0;
 		return { "pending": pending, "availableSpells": availableSpells, "level": maxSlotLevel };
 	}
 
