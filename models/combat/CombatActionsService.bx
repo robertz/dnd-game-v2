@@ -858,6 +858,34 @@ class singleton {
 			"#usedSavageAttacks ? ' (Savage Attacks)' : ''#" &
 			"#usesGreatWeaponFighting ? ' (Great Weapon Fighting)' : ''#";
 
+		// Dueling: +2 damage while wielding this one-handed melee weapon
+		// with no other weapon equipped (a shield doesn't disqualify it —
+		// only a second weapon does). Naturally excludes an off-hand
+		// attack, since the main weapon is then "another weapon equipped."
+		var hasDueling = structKeyExists( attacker, "feats" ) && arrayFindNoCase( attacker.feats, "Dueling" ) > 0;
+		var usesDueling = (
+			hasDueling && weapon.category == "melee" &&
+			!( structKeyExists( weapon, "properties" ) && arrayFindNoCase( weapon.properties, "Two-Handed" ) > 0 ) &&
+			_hasEmptyOffHand( attacker, weapon )
+		);
+		if ( usesDueling ) {
+			damage += 2;
+			damageNotes &= " +2 Dueling";
+		}
+
+		// Thrown Weapon Fighting: +2 damage on a ranged attack with a
+		// weapon that has the Thrown property (stored as one token like
+		// "Thrown (Range 20/60)", not a clean "Thrown" entry).
+		var hasThrownWeaponFighting = structKeyExists( attacker, "feats" ) && arrayFindNoCase( attacker.feats, "Thrown Weapon Fighting" ) > 0;
+		var usesThrownWeaponFighting = (
+			hasThrownWeaponFighting && weapon.category == "ranged" &&
+			structKeyExists( weapon, "properties" ) && _hasThrownProperty( weapon )
+		);
+		if ( usesThrownWeaponFighting ) {
+			damage += 2;
+			damageNotes &= " +2 Thrown Weapon Fighting";
+		}
+
 		// Sneak Attack (Rogue 1): once per turn, on a hit with a Finesse or
 		// ranged weapon made with Advantage, extra ceil(level/2)d6 damage
 		// (doubled on a Critical Hit, same as the weapon's own dice). RAW also
@@ -1075,6 +1103,50 @@ class singleton {
 			return item;
 		}
 		return javaCast( "null", 0 );
+	}
+
+	/**
+	 * Dueling's "no other weapons" check: true when no equipped melee
+	 * inventory item other than `mainWeapon` itself is also wielded. Scoped
+	 * to melee only — a stowed ranged weapon (a bow slung on your back, a
+	 * javelin quiver) isn't "in your other hand," same implicit model
+	 * offHandWeapon() already uses. Deliberately not the same test as
+	 * offHandWeapon() (which requires a Light second weapon specifically)
+	 * — Dueling cares about a fully empty off-hand, not whether a
+	 * Two-Weapon-Fighting-eligible pair happens to be equipped. A shield is
+	 * armor, not a weapon, so it never disqualifies Dueling.
+	 */
+	private function _hasEmptyOffHand( attacker, mainWeapon ) {
+		var mainId = structKeyExists( arguments.mainWeapon, "id" ) ? arguments.mainWeapon.id : javaCast( "null", 0 );
+		for ( var item in arguments.attacker.inventory ) {
+			if ( item.category != "melee" || !( structKeyExists( item, "equipped" ) && item.equipped ) ) {
+				continue;
+			}
+			// Skip the main weapon's own inventory entry (matched by id when
+			// both sides have one); anything else equipped counts as "another
+			// weapon," including when either side lacks an id to compare —
+			// safer to assume it's different than to risk a false Dueling grant.
+			if ( !isNull( mainId ) && structKeyExists( item, "id" ) && item.id == mainId ) {
+				continue;
+			}
+			return false;
+		}
+		return true;
+	}
+
+	/**
+	 * True if any of `weapon.properties` carries the Thrown property — each
+	 * entry is stored with its range baked in (e.g. "Thrown (Range 20/60)"),
+	 * not a clean "Thrown" token, so this can't use the usual
+	 * arrayFindNoCase() exact-match check the other property flags use.
+	 */
+	private function _hasThrownProperty( weapon ) {
+		for ( var prop in arguments.weapon.properties ) {
+			if ( findNoCase( "Thrown", prop ) == 1 ) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/**

@@ -32,14 +32,14 @@ class singleton {
 		variables.rules = new models.combat.RulesService();
 		variables.grid  = new models.combat.GridService();
 		variables.monsters = new models.combat.MonsterLibrary( variables.rules, variables.grid );
-		variables.spellcasting = new models.combat.SpellcastingService();
+		variables.spellcasting = new models.combat.SpellcastingService( variables.dice );
 		variables.progression = new models.combat.ProgressionService( variables.rules, variables.spellcasting );
 		variables.characterState = new models.combat.CharacterStateService( variables.rules, variables.spellcasting );
 		variables.actions = new models.combat.CombatActionsService(
 			variables.dice, variables.rules, variables.grid,
 			variables.spellcasting, variables.progression, variables.characterState
 		);
-		variables.enemyAI = new models.combat.EnemyAIService( variables.grid, variables.actions, variables.dice );
+		variables.enemyAI = new models.combat.EnemyAIService( variables.grid, variables.actions, variables.dice, variables.progression );
 		return this;
 	}
 
@@ -107,9 +107,13 @@ class singleton {
 	function applyAbilityScoreImprovement( state, choice ) { return variables.progression.applyAbilityScoreImprovement( argumentCollection = arguments ); }
 	function availableLevelUpFeats( player ) { return variables.progression.availableLevelUpFeats( argumentCollection = arguments ); }
 	function grantChosenFeat( state, featName, chosenSkills = [] ) { return variables.progression.grantChosenFeat( argumentCollection = arguments ); }
-	function fightingStyleNames() { return variables.progression.fightingStyleNames(); }
+	function fightingStyleNames( className ) { return variables.progression.fightingStyleNames( argumentCollection = arguments ); }
 	function grantFightingStyle( characterId, styleName ) { return variables.progression.grantFightingStyle( argumentCollection = arguments ); }
 	function pendingFightingStyleChoice( characterId ) { return variables.progression.pendingFightingStyleChoice( argumentCollection = arguments ); }
+	function pendingFightingStyleCantripChoice( characterId ) { return variables.progression.pendingFightingStyleCantripChoice( argumentCollection = arguments ); }
+	function chooseFightingStyleCantrip( characterId, cantripName ) { return variables.progression.chooseFightingStyleCantrip( argumentCollection = arguments ); }
+	function changeableFightingStyles( characterId ) { return variables.progression.changeableFightingStyles( argumentCollection = arguments ); }
+	function changeFightingStyle( characterId, oldStyleName, newStyleName ) { return variables.progression.changeFightingStyle( argumentCollection = arguments ); }
 	function pendingExpertiseChoice( characterId ) { return variables.progression.pendingExpertiseChoice( argumentCollection = arguments ); }
 	function chooseExpertise( characterId, skillName ) { return variables.progression.chooseExpertise( argumentCollection = arguments ); }
 	function pendingCantripChoice( characterId ) { return variables.progression.pendingCantripChoice( argumentCollection = arguments ); }

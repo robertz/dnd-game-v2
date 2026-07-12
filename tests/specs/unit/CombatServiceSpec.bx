@@ -1944,6 +1944,167 @@ class extends="testbox.system.BaseSpec" {
 				} );
 			} );
 
+			describe( "Fighting Styles (2024 expansion: Dueling, Thrown Weapon Fighting, class gating, Blessed/Druidic Warrior, Fighter swap)", () => {
+				// grantFightingStyle()/pendingFightingStyleChoice()/changeFightingStyle()/
+				// pendingFightingStyleCantripChoice() are keyed by a bare characterId and
+				// read/write the DB directly (no in-memory player struct involved), unlike
+				// grantChosenFeat() above — so these need a real throwaway `characters` row.
+				function makeTestCharacter( classId, extra = {} ){
+					var fields = { "class_id": arguments.classId, "str": 10, "dex": 10, "con": 10, "int_score": 10, "wis": 10, "cha": 10, "proficiency_bonus": 2, "armor_class": 10, "hit_points": 10, "max_hit_points": 10 }.append( arguments.extra );
+					var columns = structKeyArray( fields );
+					var placeholders = columns.map( ( c ) => ":#c#" );
+					var params = {};
+					for ( var c in columns ) {
+						params[ c ] = fields[ c ];
+					}
+					queryExecute(
+						"INSERT INTO characters (name, #arrayToList( columns )#) VALUES ('Test Character', #arrayToList( placeholders )#)",
+						params, { datasource: "gameserver", result: "local.insertResult" }
+					);
+					return local.insertResult.generatedKey;
+				}
+
+				function dropTestCharacter( characterId ){
+					queryExecute( "DELETE FROM character_feats WHERE character_id = :id", { "id": arguments.characterId }, { datasource: "gameserver" } );
+					queryExecute( "DELETE FROM character_features WHERE character_id = :id", { "id": arguments.characterId }, { datasource: "gameserver" } );
+					queryExecute( "DELETE FROM characters WHERE id = :id", { "id": arguments.characterId }, { datasource: "gameserver" } );
+				}
+
+				it( "Dueling adds +2 damage with a one-handed melee weapon and an empty off-hand", () => {
+					var attacker = { "name": "Attacker", "feats": [ "Dueling" ], "inventory": [] };
+					var weapon = { "name": "Longsword", "damageDice": "1d1", "damageType": "Slashing", "attackBonus": 100, "damageBonus": 0, "category": "melee", "properties": [] };
+					var sawHit = false;
+					for ( var i = 1; i <= 30 && !sawHit; i++ ) {
+						var log = [];
+						var defender = makeCombatant( 0, 0, { "armorClass": 1 } );
+						service.resolveAttack( log, attacker, defender, weapon, false );
+						if ( defender.hitPoints < 500 ) {
+							sawHit = true;
+							// 1d1 hit is 1 or 2 (crit) damage, plus the flat +2 from Dueling.
+							expect( [ 3, 4 ] ).toInclude( 500 - defender.hitPoints );
+							expect( log[ 1 ] ).toInclude( "Dueling" );
+						}
+					}
+					expect( sawHit ).toBeTrue();
+				} );
+
+				it( "Dueling does not apply with a Two-Handed weapon or a second weapon equipped", () => {
+					var twoHanded = { "name": "Greatsword", "damageDice": "1d1", "damageType": "Slashing", "attackBonus": 100, "damageBonus": 0, "category": "melee", "properties": [ "Two-Handed" ] };
+					var attacker1 = { "name": "Attacker", "feats": [ "Dueling" ], "inventory": [] };
+					var log1 = [];
+					var defender1 = makeCombatant( 0, 0, { "armorClass": 1 } );
+					service.resolveAttack( log1, attacker1, defender1, twoHanded, false );
+					expect( log1[ 1 ] ).notToInclude( "Dueling" );
+
+					var oneHanded = { "name": "Longsword", "damageDice": "1d1", "damageType": "Slashing", "attackBonus": 100, "damageBonus": 0, "category": "melee", "properties": [] };
+					var attacker2 = { "name": "Attacker", "feats": [ "Dueling" ], "inventory": [ { "id": 99, "category": "melee", "equipped": true } ] };
+					var log2 = [];
+					var defender2 = makeCombatant( 0, 0, { "armorClass": 1 } );
+					service.resolveAttack( log2, attacker2, defender2, oneHanded, false );
+					expect( log2[ 1 ] ).notToInclude( "Dueling" );
+				} );
+
+				it( "Thrown Weapon Fighting adds +2 damage on a thrown ranged attack, not on a non-thrown ranged weapon", () => {
+					var attacker = { "name": "Attacker", "feats": [ "Thrown Weapon Fighting" ], "inventory": [] };
+					var thrown = { "name": "Javelin", "damageDice": "1d1", "damageType": "Piercing", "attackBonus": 100, "damageBonus": 0, "category": "ranged", "properties": [ "Thrown (Range 30/120)" ] };
+					var sawHit = false;
+					for ( var i = 1; i <= 30 && !sawHit; i++ ) {
+						var log = [];
+						var defender = makeCombatant( 0, 0, { "armorClass": 1 } );
+						service.resolveAttack( log, attacker, defender, thrown, false );
+						if ( defender.hitPoints < 500 ) {
+							sawHit = true;
+							expect( [ 3, 4 ] ).toInclude( 500 - defender.hitPoints );
+							expect( log[ 1 ] ).toInclude( "Thrown Weapon Fighting" );
+						}
+					}
+					expect( sawHit ).toBeTrue();
+
+					var trueRanged = { "name": "Shortbow", "damageDice": "1d1", "damageType": "Piercing", "attackBonus": 100, "damageBonus": 0, "category": "ranged", "properties": [ "Ammunition" ] };
+					var log2 = [];
+					var defender2 = makeCombatant( 0, 0, { "armorClass": 1 } );
+					service.resolveAttack( log2, attacker, defender2, trueRanged, false );
+					expect( log2[ 1 ] ).notToInclude( "Thrown Weapon Fighting" );
+				} );
+
+				it( "fightingStyleNames() filters class-exclusive styles per class", () => {
+					var forPaladin = service.fightingStyleNames( "Paladin" );
+					expect( arrayFindNoCase( forPaladin, "Blessed Warrior" ) ).toBeGT( 0 );
+					expect( arrayFindNoCase( forPaladin, "Druidic Warrior" ) ).toBe( 0 );
+
+					var forRanger = service.fightingStyleNames( "Ranger" );
+					expect( arrayFindNoCase( forRanger, "Druidic Warrior" ) ).toBeGT( 0 );
+					expect( arrayFindNoCase( forRanger, "Blessed Warrior" ) ).toBe( 0 );
+
+					var forFighter = service.fightingStyleNames( "Fighter" );
+					expect( arrayFindNoCase( forFighter, "Blessed Warrior" ) ).toBe( 0 );
+					expect( arrayFindNoCase( forFighter, "Druidic Warrior" ) ).toBe( 0 );
+					// Universal styles remain available to every class.
+					expect( arrayFindNoCase( forFighter, "Dueling" ) ).toBeGT( 0 );
+				} );
+
+				it( "grantFightingStyle() rejects an out-of-class exclusive style", () => {
+					var characterId = makeTestCharacter( 5 ); // Fighter
+					var granted = service.grantFightingStyle( characterId, "Druidic Warrior" );
+					expect( granted ).toBeFalse();
+					var rows = queryExecute( "SELECT * FROM character_feats WHERE character_id = :id", { "id": characterId }, { datasource: "gameserver" } );
+					expect( rows.recordCount ).toBe( 0 );
+					dropTestCharacter( characterId );
+				} );
+
+				it( "granting Blessed Warrior queues 2 pending Cleric cantrip picks, chooseFightingStyleCantrip() consumes them", () => {
+					var characterId = makeTestCharacter( 7 ); // Paladin
+					var granted = service.grantFightingStyle( characterId, "Blessed Warrior" );
+					expect( granted ).toBeTrue();
+
+					var pendingFirst = service.pendingFightingStyleCantripChoice( characterId );
+					expect( pendingFirst.pending ).toBe( 2 );
+					expect( pendingFirst.availableCantrips.len() ).toBeGT( 0 );
+
+					service.chooseFightingStyleCantrip( characterId, pendingFirst.availableCantrips[ 1 ].name );
+					var pendingSecond = service.pendingFightingStyleCantripChoice( characterId );
+					expect( pendingSecond.pending ).toBe( 1 );
+
+					var rows = queryExecute( "SELECT known_cantrips FROM characters WHERE id = :id", { "id": characterId }, { datasource: "gameserver" } );
+					expect( rows.known_cantrips[ 1 ] ).toInclude( pendingFirst.availableCantrips[ 1 ].name );
+					dropTestCharacter( characterId );
+				} );
+
+				it( "changeableFightingStyles() is populated for a Fighter holding a style, empty for a Paladin", () => {
+					var fighterId = makeTestCharacter( 5 );
+					service.grantFightingStyle( fighterId, "Archery" );
+					var fighterChoices = service.changeableFightingStyles( fighterId );
+					expect( arrayFindNoCase( fighterChoices.current, "Archery" ) ).toBeGT( 0 );
+					expect( arrayFindNoCase( fighterChoices.available, "Archery" ) ).toBe( 0 );
+					expect( arrayFindNoCase( fighterChoices.available, "Defense" ) ).toBeGT( 0 );
+					dropTestCharacter( fighterId );
+
+					var paladinId = makeTestCharacter( 7 );
+					service.grantFightingStyle( paladinId, "Defense" );
+					var paladinChoices = service.changeableFightingStyles( paladinId );
+					expect( paladinChoices.current.len() ).toBe( 0 );
+					expect( paladinChoices.available.len() ).toBe( 0 );
+					dropTestCharacter( paladinId );
+				} );
+
+				it( "changeFightingStyle() swaps a Fighter's style and rejects a non-Fighter", () => {
+					var fighterId = makeTestCharacter( 5 );
+					service.grantFightingStyle( fighterId, "Archery" );
+					var swapped = service.changeFightingStyle( fighterId, "Archery", "Defense" );
+					expect( swapped ).toBeTrue();
+					var afterSwap = service.changeableFightingStyles( fighterId );
+					expect( arrayFindNoCase( afterSwap.current, "Defense" ) ).toBeGT( 0 );
+					expect( arrayFindNoCase( afterSwap.current, "Archery" ) ).toBe( 0 );
+					dropTestCharacter( fighterId );
+
+					var paladinId = makeTestCharacter( 7 );
+					service.grantFightingStyle( paladinId, "Defense" );
+					var rejected = service.changeFightingStyle( paladinId, "Defense", "Dueling" );
+					expect( rejected ).toBeFalse();
+					dropTestCharacter( paladinId );
+				} );
+			} );
+
 			describe( "isFullCasterClass()", () => {
 				it( "is true for each of the six full-caster classes", () => {
 					for ( var className in [ "Bard", "Cleric", "Druid", "Sorcerer", "Warlock", "Wizard" ] ) {

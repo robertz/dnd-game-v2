@@ -28,7 +28,7 @@
 		};
 
 		if ( cls.hasFightingStyle ) {
-			cls.fightingStyles = combatService.fightingStyleNames();
+			cls.fightingStyles = combatService.fightingStyleNames( row.name );
 		}
 
 		result.append( cls );

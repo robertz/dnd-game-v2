@@ -637,6 +637,12 @@ class singleton {
 			"knownSpellName": len( row.known_spells[ 1 ] ) ? listToArray( row.known_spells[ 1 ] )[ 1 ] : "",
 			// { pending, availableStyles } — see CombatService.pendingFightingStyleChoice().
 			"fightingStyleChoice": combatService.pendingFightingStyleChoice( arguments.characterId ),
+			// { pending, availableCantrips } — Blessed Warrior/Druidic Warrior's
+			// 2-cantrip pick, see CombatService.pendingFightingStyleCantripChoice().
+			"fightingStyleCantripChoice": combatService.pendingFightingStyleCantripChoice( arguments.characterId ),
+			// { current, available } — Fighter-only style swap, both empty for
+			// any other class. See CombatService.changeableFightingStyles().
+			"changeableFightingStyles": combatService.changeableFightingStyles( arguments.characterId ),
 			"subclassName": isNull( row.subclassName[ 1 ] ) ? "" : row.subclassName[ 1 ],
 			// { pending, availableSubclasses } — see CombatService.pendingSubclassChoice().
 			"subclassChoice": combatService.pendingSubclassChoice( arguments.characterId ),

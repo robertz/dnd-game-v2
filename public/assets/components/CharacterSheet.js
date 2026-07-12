@@ -77,6 +77,32 @@ const CharacterSheet = {
 						</div>
 					</div>
 
+					<div v-if="character.fightingStyleCantripChoice && character.fightingStyleCantripChoice.pending > 0" class="sheet-choice-panel">
+						<h3 class="fantasy-heading sheet-choice-title">Choose a Cantrip ({{ character.fightingStyleCantripChoice.pending }} remaining)</h3>
+						<div class="creation-grid">
+							<div v-for="opt in character.fightingStyleCantripChoice.availableCantrips" :key="opt.name"
+								class="creation-card creation-card-compact"
+								:title="describeSpell(opt)"
+								@click="sheetAction('chooseFightingStyleCantrip',{cantripName:opt.name})"
+							>{{ opt.name }}</div>
+						</div>
+					</div>
+
+					<div v-if="character.changeableFightingStyles && character.changeableFightingStyles.current.length > 0" class="sheet-choice-panel">
+						<h3 class="fantasy-heading sheet-choice-title">Change Fighting Style</h3>
+						<label class="stat-subtitle">Replace
+							<select v-model="changeStyleFrom" class="creation-input creation-input-sm">
+								<option v-for="style in character.changeableFightingStyles.current" :key="style" :value="style">{{ style }}</option>
+							</select>
+						</label>
+						<div class="creation-grid">
+							<div v-for="style in character.changeableFightingStyles.available" :key="style"
+								class="creation-card creation-card-compact"
+								@click="sheetAction('changeFightingStyle',{oldStyleName:changeStyleFrom,newStyleName:style})"
+							>{{ style }}</div>
+						</div>
+					</div>
+
 					<div v-if="cantripChoice.pending" class="sheet-choice-panel">
 						<h3 class="fantasy-heading sheet-choice-title">Learn a Cantrip</h3>
 						<div class="creation-grid">
@@ -341,6 +367,10 @@ const CharacterSheet = {
 		const spellChoice      = ref( { pending: false, availableSpells: [], level: 0 } );
 		const expertiseChoice  = ref( { pending: false, availableSkills: [] } );
 		const magicInitiateChoice = ref( { pendingCantrips: 0, availableCantrips: [], pendingSpell: false, availableSpells: [] } );
+		// Which currently-held Fighting Style the "Change Fighting Style"
+		// panel's replacement grid applies to — a Fighter almost always has
+		// exactly one, so this just defaults to the first.
+		const changeStyleFrom = ref( "" );
 
 		const tab               = ref( "weapons" );
 		const message           = ref( "" );
@@ -396,6 +426,10 @@ const CharacterSheet = {
 			spellChoice.value      = data.spellChoice      ?? { pending: false, availableSpells: [], level: 0 };
 			expertiseChoice.value  = data.expertiseChoice  ?? { pending: false, availableSkills: [] };
 			magicInitiateChoice.value = data.magicInitiateChoice ?? { pendingCantrips: 0, availableCantrips: [], pendingSpell: false, availableSpells: [] };
+			const currentStyles = character.value.changeableFightingStyles?.current ?? [];
+			if ( !currentStyles.includes( changeStyleFrom.value ) ) {
+				changeStyleFrom.value = currentStyles[0] ?? "";
+			}
 			if ( availableWeapons.value.length && !addWeaponId.value ) addWeaponId.value = availableWeapons.value[0].id;
 			if ( availableArmors.value.length  && !addArmorId.value  ) addArmorId.value  = availableArmors.value[0].id;
 			if ( availableItems.value.length   && !addItemId.value   ) addItemId.value   = availableItems.value[0].id;
@@ -488,7 +522,7 @@ const CharacterSheet = {
 		return {
 			loading, error, character, inventory, armorInventory, itemInventory,
 			availableWeapons, availableArmors, availableItems,
-			cantripOptions, spellOptions, cantripChoice, spellChoice, expertiseChoice, magicInitiateChoice,
+			cantripOptions, spellOptions, cantripChoice, spellChoice, expertiseChoice, magicInitiateChoice, changeStyleFrom,
 			tab, message, addWeaponId, addWeaponCategory, addArmorId, addItemId, addItemQuantity,
 			selectedCantripName, selectedSpellName, availableTabs,
 			sheetAction, inventoryMutate, addWeapon, addItem, saveSpells, modLabel, capitalize, describeSpell

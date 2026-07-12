@@ -28,12 +28,24 @@ class singleton {
 	// feat) have no mechanical hook anywhere and aren't offered.
 	LEVEL_UP_FEAT_NAMES = [ "Alert", "Grappler", "Magic Initiate", "Savage Attacker", "Skilled" ];
 
-	// The 4 Fighting Style feats with a mechanical hook in this file —
-	// Archery (attack roll bonus), Great Weapon Fighting (reroll low damage
-	// dice), Defense (+1 AC), Two-Weapon Fighting (ability mod on off-hand
-	// damage). Chosen by the player, never auto-picked — see
-	// grantFightingStyle()/pendingFightingStyleChoice().
-	FIGHTING_STYLE_NAMES = [ "Archery", "Defense", "Great Weapon Fighting", "Two-Weapon Fighting" ];
+	// The 8 Fighting Style feats with a mechanical hook in this file —
+	// Archery (attack roll bonus), Defense (+1 AC), Dueling (+2 damage,
+	// one-handed melee with an empty off-hand), Great Weapon Fighting
+	// (reroll low damage dice), Thrown Weapon Fighting (+2 damage on a
+	// thrown ranged attack), Two-Weapon Fighting (ability mod on off-hand
+	// damage), Blessed Warrior/Druidic Warrior (2 cantrips from another
+	// class's list — see grantFightingStyle()'s cantrip side effect and
+	// pendingFightingStyleCantripChoice()). Chosen by the player, never
+	// auto-picked — see grantFightingStyle()/pendingFightingStyleChoice().
+	FIGHTING_STYLE_NAMES = [
+		"Archery", "Defense", "Dueling", "Great Weapon Fighting", "Thrown Weapon Fighting",
+		"Two-Weapon Fighting", "Blessed Warrior", "Druidic Warrior"
+	];
+
+	// Fighting Styles restricted to a single class (2024 PHB) — every other
+	// name in FIGHTING_STYLE_NAMES is open to any class that gets a
+	// Fighting Style pick at all (Fighter/Paladin/Ranger).
+	FIGHTING_STYLE_CLASS_EXCLUSIVE = { "Blessed Warrior": "Paladin", "Druidic Warrior": "Ranger" };
 
 	/**
 	 * Awards `xp` to a saved character's persisted record (gameserver.characters),
@@ -871,21 +883,50 @@ class singleton {
 	}
 
 	/**
-	 * The pickable Fighting Style names — see FIGHTING_STYLE_NAMES.
+	 * The `classes.name` for `characterId`, or "" if no such character
+	 * exists — the Fighting Style functions only ever receive a bare
+	 * characterId, unlike most of this file which already has a loaded
+	 * `player` struct with `.class` on hand.
 	 */
-	function fightingStyleNames() {
-		return FIGHTING_STYLE_NAMES;
+	private function _classNameForCharacter( characterId ) {
+		var rows = queryExecute(
+			"SELECT cl.name FROM characters c JOIN classes cl ON cl.id = c.class_id WHERE c.id = :characterId",
+			{ "characterId": arguments.characterId },
+			{ datasource: "gameserver" }
+		);
+		return rows.recordCount > 0 ? rows.name[ 1 ] : "";
+	}
+
+	/**
+	 * The pickable Fighting Style names for `className` — every name in
+	 * FIGHTING_STYLE_NAMES except a FIGHTING_STYLE_CLASS_EXCLUSIVE entry
+	 * reserved for a different class (Blessed Warrior/Paladin, Druidic
+	 * Warrior/Ranger).
+	 */
+	function fightingStyleNames( className ) {
+		var names = [];
+		for ( var style in FIGHTING_STYLE_NAMES ) {
+			var exclusiveTo = FIGHTING_STYLE_CLASS_EXCLUSIVE.keyExists( style ) ? FIGHTING_STYLE_CLASS_EXCLUSIVE[ style ] : "";
+			if ( !len( exclusiveTo ) || exclusiveTo == arguments.className ) {
+				names.append( style );
+			}
+		}
+		return names;
 	}
 
 	/**
 	 * Grants a specific, player-chosen Fighting Style feat. Returns true if
-	 * granted, false for an unrecognized style name or missing feat row.
+	 * granted, false for a style not legal for this character's class or a
+	 * missing feat row. Blessed Warrior/Druidic Warrior additionally queue
+	 * 2 pending cantrip picks from the Cleric/Druid spell list — see
+	 * pendingFightingStyleCantripChoice()/chooseFightingStyleCantrip().
 	 *
 	 * @characterId characters.id to grant the feat to.
-	 * @styleName One of FIGHTING_STYLE_NAMES.
+	 * @styleName One of fightingStyleNames(this character's class).
 	 */
 	function grantFightingStyle( characterId, styleName ) {
-		if ( arrayFindNoCase( FIGHTING_STYLE_NAMES, arguments.styleName ) == 0 ) {
+		var className = _classNameForCharacter( arguments.characterId );
+		if ( arrayFindNoCase( fightingStyleNames( className ), arguments.styleName ) == 0 ) {
 			return false;
 		}
 		var featRows = queryExecute(
@@ -901,6 +942,14 @@ class singleton {
 			{ "characterId": arguments.characterId, "featId": featRows.id[ 1 ] },
 			{ datasource: "gameserver" }
 		);
+		if ( FIGHTING_STYLE_CLASS_EXCLUSIVE.keyExists( arguments.styleName ) ) {
+			var cantripClass = ( arguments.styleName == "Blessed Warrior" ) ? "Cleric" : "Druid";
+			queryExecute(
+				"UPDATE characters SET pending_fighting_style_cantrips = 2, fighting_style_cantrip_class = :cantripClass WHERE id = :characterId",
+				{ "characterId": arguments.characterId, "cantripClass": cantripClass },
+				{ datasource: "gameserver" }
+			);
+		}
 		return true;
 	}
 
@@ -912,7 +961,8 @@ class singleton {
 	 * many Fighting Style feats have actually been chosen, since a
 	 * character can be due more than one over their career. Returns
 	 * `{ pending, availableStyles }` — `availableStyles` excludes any style
-	 * already held (can't pick the same one twice).
+	 * already held (can't pick the same one twice) and any style not legal
+	 * for this character's class.
 	 */
 	function pendingFightingStyleChoice( characterId ) {
 		var unlockedRows = queryExecute(
@@ -939,13 +989,115 @@ class singleton {
 		var pending = unlockedRows.unlockedCount[ 1 ] > chosenStyleCount;
 		var availableStyles = [];
 		if ( pending ) {
-			for ( var style in FIGHTING_STYLE_NAMES ) {
+			var className = _classNameForCharacter( arguments.characterId );
+			for ( var style in fightingStyleNames( className ) ) {
 				if ( arrayFindNoCase( chosenNames, style ) == 0 ) {
 					availableStyles.append( style );
 				}
 			}
 		}
 		return { "pending": pending, "availableStyles": availableStyles };
+	}
+
+	/**
+	 * Pending Blessed Warrior/Druidic Warrior cantrip picks — same shape as
+	 * pendingMagicInitiateChoice()'s cantrip half, but sourced from whichever
+	 * class grantFightingStyle() recorded in fighting_style_cantrip_class
+	 * instead of a hardcoded class. Returns `{ pending, availableCantrips }`.
+	 */
+	function pendingFightingStyleCantripChoice( characterId ) {
+		var charRow = queryExecute(
+			"SELECT known_cantrips, pending_fighting_style_cantrips, fighting_style_cantrip_class FROM characters WHERE id = :characterId",
+			{ "characterId": arguments.characterId },
+			{ datasource: "gameserver" }
+		);
+		if ( charRow.recordCount == 0 || charRow.pending_fighting_style_cantrips[ 1 ] <= 0 ) {
+			return { "pending": 0, "availableCantrips": [] };
+		}
+		var pending = charRow.pending_fighting_style_cantrips[ 1 ];
+		var knownCantrips = len( charRow.known_cantrips[ 1 ] ) ? listToArray( charRow.known_cantrips[ 1 ] ) : [];
+		var availableCantrips = [];
+		for ( var cantrip in variables.spellcasting.listCastableSpells( charRow.fighting_style_cantrip_class[ 1 ], 0 ) ) {
+			if ( arrayFindNoCase( knownCantrips, cantrip.name ) == 0 ) {
+				availableCantrips.append( cantrip );
+			}
+		}
+		return { "pending": pending, "availableCantrips": availableCantrips };
+	}
+
+	/**
+	 * Records one Blessed Warrior/Druidic Warrior cantrip pick, decrementing
+	 * the pending count — the Fighting Style counterpart to
+	 * chooseMagicInitiateCantrip().
+	 */
+	function chooseFightingStyleCantrip( characterId, cantripName ) {
+		_appendKnownSpellName( arguments.characterId, "known_cantrips", arguments.cantripName );
+		queryExecute(
+			"UPDATE characters
+			 SET pending_fighting_style_cantrips = GREATEST( 0, pending_fighting_style_cantrips - 1 )
+			 WHERE id = :characterId",
+			{ "characterId": arguments.characterId },
+			{ datasource: "gameserver" }
+		);
+	}
+
+	/**
+	 * The Fighting Style(s) `characterId` currently holds and the legal
+	 * alternatives they could swap to — only Fighters get to change their
+	 * Fighting Style (2024 PHB); both arrays are empty for any other class.
+	 * Returns `{ current, available }`.
+	 */
+	function changeableFightingStyles( characterId ) {
+		var className = _classNameForCharacter( arguments.characterId );
+		if ( className != "Fighter" ) {
+			return { "current": [], "available": [] };
+		}
+		var chosenRows = queryExecute(
+			"SELECT f.name FROM character_feats chf JOIN feats f ON f.id = chf.feat_id WHERE chf.character_id = :characterId",
+			{ "characterId": arguments.characterId },
+			{ datasource: "gameserver" }
+		);
+		var current = [];
+		for ( var row in chosenRows ) {
+			if ( arrayFindNoCase( FIGHTING_STYLE_NAMES, row.name ) > 0 ) {
+				current.append( row.name );
+			}
+		}
+		if ( current.len() == 0 ) {
+			return { "current": [], "available": [] };
+		}
+		var available = [];
+		for ( var style in fightingStyleNames( className ) ) {
+			if ( arrayFindNoCase( current, style ) == 0 ) {
+				available.append( style );
+			}
+		}
+		return { "current": current, "available": available };
+	}
+
+	/**
+	 * Swaps a Fighter's `oldStyleName` for `newStyleName` — validates the
+	 * class is Fighter, `oldStyleName` is currently held, and `newStyleName`
+	 * is legal and not already held, then removes the old Fighting Style
+	 * feat row and grants the new one via grantFightingStyle() (so a future
+	 * Blessed Warrior/Druidic Warrior swap would still correctly queue its
+	 * cantrip picks). Returns true on success.
+	 */
+	function changeFightingStyle( characterId, oldStyleName, newStyleName ) {
+		var choices = changeableFightingStyles( arguments.characterId );
+		if (
+			arrayFindNoCase( choices.current, arguments.oldStyleName ) == 0 ||
+			arrayFindNoCase( choices.available, arguments.newStyleName ) == 0
+		) {
+			return false;
+		}
+		queryExecute(
+			"DELETE cf FROM character_feats cf JOIN feats f ON f.id = cf.feat_id
+			 WHERE cf.character_id = :characterId AND f.name = :oldStyleName",
+			{ "characterId": arguments.characterId, "oldStyleName": arguments.oldStyleName },
+			{ datasource: "gameserver" }
+		);
+		return grantFightingStyle( arguments.characterId, arguments.newStyleName );
 	}
 
 	/**

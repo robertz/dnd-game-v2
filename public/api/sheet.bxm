@@ -108,6 +108,12 @@
 		case "chooseMagicInitiateSpell":
 			combatService.chooseMagicInitiateSpell( charId, body.spellName );
 			break;
+		case "chooseFightingStyleCantrip":
+			combatService.chooseFightingStyleCantrip( charId, body.cantripName );
+			break;
+		case "changeFightingStyle":
+			combatService.changeFightingStyle( charId, body.oldStyleName, body.newStyleName );
+			break;
 	}
 
 	character = characterService.getCharacterSheet( charId );

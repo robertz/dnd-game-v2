@@ -6,6 +6,11 @@
  */
 class singleton {
 
+	function init( dice ) {
+		variables.dice = arguments.dice;
+		return this;
+	}
+
 	// Full-caster Spell Slots by level (index = level, value = slots per spell
 	// level 1-9). Warlock uses Pact Magic, mechanically simplified here to the
 	// same table (Warlocks actually have fewer, higher-level slots that
@@ -341,11 +346,11 @@ class singleton {
 		var level = arguments.rows.level[ arguments.i ];
 		var concentration = findNoCase( "Concentration", arguments.rows.duration[ arguments.i ] ) > 0;
 		if ( arguments.rows.effect_type[ arguments.i ] == "heal" ) {
-			var healDice = parseDice( arguments.rows.heal_dice[ arguments.i ] );
+			var healDice = variables.dice.parseDice( arguments.rows.heal_dice[ arguments.i ] );
 			return { "type": "heal", "name": arguments.rows.name[ arguments.i ], "level": level, "concentration": concentration, "diceCount": healDice.count, "diceSides": healDice.sides };
 		}
 
-		var damageDice = parseDice( arguments.rows.damage_dice[ arguments.i ] );
+		var damageDice = variables.dice.parseDice( arguments.rows.damage_dice[ arguments.i ] );
 		var rangeSquares = _parseSpellRangeSquares( arguments.rows.range[ arguments.i ] );
 		if ( arguments.rows.effect_type[ arguments.i ] == "attack" ) {
 			return {

@@ -2,14 +2,15 @@
  * Encounter AI and round orchestration: the enemy phase (per-opponent
  * turns, aggro/threat targeting, legendary actions), the auto-battle
  * player brain, initiative, and the player-to-enemy turn handoff.
- * Depends on Grid, CombatActions, and Dice.
+ * Depends on Grid, CombatActions, Dice, and Progression.
  */
 class singleton {
 
-	function init( grid, actions, dice ) {
-		variables.grid    = arguments.grid;
-		variables.actions = arguments.actions;
-		variables.dice    = arguments.dice;
+	function init( grid, actions, dice, progression ) {
+		variables.grid        = arguments.grid;
+		variables.actions     = arguments.actions;
+		variables.dice        = arguments.dice;
+		variables.progression = arguments.progression;
 		return this;
 	}
 
