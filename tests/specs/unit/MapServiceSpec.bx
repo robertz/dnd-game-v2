@@ -1,0 +1,80 @@
+/**
+ * Unit tests for app/models/MapService.bx — level parsing and the
+ * precomputed per-tile CSS class grid (`tileClasses`).
+ *
+ * Instantiated directly (no ColdBox bootstrap), same as CombatServiceSpec.
+ * Only the hard-coded ASCII level path is covered here — getModuleMap()'s
+ * DB-backed decode shares _buildTileClassGrid() with it, but exercising it
+ * needs a seeded `adventure_maps` fixture, which belongs in an integration
+ * spec.
+ */
+class extends="testbox.system.BaseSpec" {
+
+	function beforeAll(){
+		variables.service = new models.MapService();
+	}
+
+	function run(){
+		describe( "getLevel()", () => {
+			it( "returns a tileClasses grid matching the level's dimensions", () => {
+				var level = service.getLevel( "ruinedCrypt" );
+				expect( level ).toHaveKey( "tileClasses" );
+				expect( level.tileClasses.len() ).toBe( level.height );
+				expect( level.tileClasses[ 1 ].len() ).toBe( level.width );
+				expect( level.tileClasses[ level.height ].len() ).toBe( level.width );
+			} );
+
+			it( "precomputes the same class default.bxm used to derive per tile", () => {
+				var level = service.getLevel( "ruinedCrypt" );
+				for ( var y = 1; y <= level.height; y++ ) {
+					for ( var x = 1; x <= level.width; x++ ) {
+						var decoration = level.decorations[ y ][ x ];
+						var isWall = ( level.tiles[ y ][ x ] == "wall" );
+						var expected = "";
+						if ( len( decoration ) ) {
+							expected = " tile-" & decoration;
+						} else if ( isWall ) {
+							var autotile = service.wallAutotileClass( level, x, y );
+							expected = len( autotile ) ? ( " tile-" & autotile ) : " tile-wall";
+						}
+						expect( level.tileClasses[ y ][ x ] ).toBe( expected, "tile (#x#, #y#)" );
+					}
+				}
+			} );
+
+			it( "never leaves a wall tile without a wall-family class", () => {
+				var level = service.getLevel( "grandDungeon" );
+				for ( var y = 1; y <= level.height; y++ ) {
+					for ( var x = 1; x <= level.width; x++ ) {
+						if ( level.tiles[ y ][ x ] == "wall" && !len( level.decorations[ y ][ x ] ) ) {
+							expect( level.tileClasses[ y ][ x ] ).toInclude( " tile-wall" );
+						}
+					}
+				}
+			} );
+
+			it( "bare floor tiles get an empty class fragment", () => {
+				var level = service.getLevel( "openField" );
+				// openField is all undecorated floor.
+				expect( level.tileClasses[ 2 ][ 2 ] ).toBe( "" );
+			} );
+
+			it( "returns a fresh wrapper per call so callers can't contaminate the cache", () => {
+				var first = service.getLevel( "ruinedCrypt" );
+				first.pois.append( { "x": 1, "y": 1, "type": "loot", "payload": {} } );
+				first.playerSpawn.x = 99;
+				var second = service.getLevel( "ruinedCrypt" );
+				expect( second.pois.len() ).toBe( 0 );
+				expect( second.playerSpawn.x ).notToBe( 99 );
+			} );
+
+			it( "falls back to openField for an unknown level name", () => {
+				var level = service.getLevel( "no-such-level" );
+				var openField = service.getLevel( "openField" );
+				expect( level.width ).toBe( openField.width );
+				expect( level.height ).toBe( openField.height );
+			} );
+		} );
+	}
+
+}

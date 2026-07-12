@@ -1,10 +1,16 @@
 {
-	"name": "dnd-game-v2",
-	"version": "1.0.0",
-	"type": "project",
-	"language": "boxlang",
-	"scripts": {
-		"format": "!boxlang format --source models/,*.bx",
-		"format:check": "!boxlang format --check --source models/,*.bx"
-	}
+    "name":"dnd-game-v2",
+    "version":"1.0.0",
+    "type":"project",
+    "language":"boxlang",
+    "scripts":{
+        "format":"!boxlang format --source models/,*.bx",
+        "format:check":"!boxlang format --check --source models/,*.bx"
+    },
+    "dependencies":{
+        "testbox":"^7.0.0+19"
+    },
+    "installPaths":{
+        "testbox":"testbox/"
+    }
 }

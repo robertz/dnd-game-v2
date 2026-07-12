@@ -1,0 +1,21 @@
+/**
+ * Minimal application listener for the tests/ directory — just enough to
+ * give test requests a real application/session scope (several models
+ * lazily read/write application-scoped caches, e.g. MapService.bx's
+ * _ensureCaches()). No ColdBox/WireBox bootstrap: CombatServiceSpec and
+ * MapServiceSpec instantiate their services directly and have no injected
+ * dependencies.
+ */
+class {
+
+	this.name = "dndGameV2Tests";
+	this.sessionManagement = true;
+	this.sessionTimeout = createTimespan( 0, 0, 15, 0 );
+	this.applicationTimeout = createTimespan( 0, 0, 15, 0 );
+
+	public boolean function onRequestStart( targetPage ) {
+		bx:setting requestTimeout="9999";
+		return true;
+	}
+
+}

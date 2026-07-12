@@ -17,6 +17,10 @@
             "enable":true,
             "uri":"/ws",
             "listener":"/WebSocket.bx"
+        },
+        "aliases":{
+            "/tests":"./tests/",
+            "/testbox":"./testbox/"
         }
     },
     "scripts":{

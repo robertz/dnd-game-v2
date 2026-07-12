@@ -9,7 +9,9 @@
 	"mappings": {
 		"/models": "${user-dir}/models",
 		"/modules": "${user-dir}/modules",
-		"/public": "${user-dir}/public"
+		"/public": "${user-dir}/public",
+		"/tests": "${user-dir}/tests",
+		"/testbox": "${user-dir}/testbox"
 	},
 	"modulesDirectory": [
 		"${user-dir}/modules",
