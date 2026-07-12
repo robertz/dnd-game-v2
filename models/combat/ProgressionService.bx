@@ -1,0 +1,1262 @@
+/**
+ * Character progression: XP awards and level-ups, ability score
+ * improvements, feats, fighting styles, subclass/multiclass choices, and
+ * the level-up cantrip/spell/expertise pickers. Depends on RulesService
+ * and SpellcastingService. Stateless.
+ */
+class singleton {
+
+	function init( rules, spellcasting ) {
+		variables.rules        = arguments.rules;
+		variables.spellcasting = arguments.spellcasting;
+		return this;
+	}
+
+	// Character Advancement table: XP required to reach each level (index = level).
+	XP_THRESHOLDS = [
+		0, 300, 900, 2700, 6500, 14000, 23000, 34000, 48000, 64000,
+		85000, 100000, 120000, 140000, 165000, 195000, 225000, 265000, 305000, 355000
+	];
+
+	// The non-Fighting-Style feats with a real mechanical hook elsewhere in
+	// this file (Alert: initiative, Grappler: Advantage vs. a Grappled
+	// target, Magic Initiate: a simple attack cantrip, Savage Attacker: roll
+	// damage twice, Skilled: skill proficiencies via _grantSkilledSkills())
+	// — offered at an Ability Score Improvement level-up as the alternative
+	// to raising ability scores. The other ~10 feats in the `feats` table
+	// (the "Boon of ..." epic boons, plain "Ability Score Improvement" as a
+	// feat) have no mechanical hook anywhere and aren't offered.
+	LEVEL_UP_FEAT_NAMES = [ "Alert", "Grappler", "Magic Initiate", "Savage Attacker", "Skilled" ];
+
+	// The 4 Fighting Style feats with a mechanical hook in this file —
+	// Archery (attack roll bonus), Great Weapon Fighting (reroll low damage
+	// dice), Defense (+1 AC), Two-Weapon Fighting (ability mod on off-hand
+	// damage). Chosen by the player, never auto-picked — see
+	// grantFightingStyle()/pendingFightingStyleChoice().
+	FIGHTING_STYLE_NAMES = [ "Archery", "Defense", "Great Weapon Fighting", "Two-Weapon Fighting" ];
+
+	/**
+	 * Awards `xp` to a saved character's persisted record (gameserver.characters),
+	 * then checks the Character Advancement table and levels the character up
+	 * (possibly multiple times, for a very large XP award) if the new total
+	 * crosses one or more thresholds. Levels, HP, Proficiency Bonus, and any
+	 * newly-gained class features are updated on both `state.player` (so the
+	 * running encounter reflects it immediately) and the persisted row.
+	 *
+	 * @state The encounter's full mutable game state struct.
+	 * @xp The amount of XP being awarded.
+	 */
+	/**
+	 * Increments one of a character's lifetime counters (monsters_fought,
+	 * monsters_killed, deaths) directly in the DB, the same "persist as it
+	 * happens" pattern awardExperience() uses rather than waiting for
+	 * saveCharacterState() — these are per-event counters, not per-encounter
+	 * resource state, so they shouldn't be lost if the browser closes
+	 * mid-encounter. A no-op for a player with no characterId (e.g. a test
+	 * double), same guard awardExperience() applies via its own recordCount
+	 * check.
+	 *
+	 * @characterId characters.id.
+	 * @column One of "monsters_fought", "monsters_killed", "deaths" — never
+	 *  user input, so string-building the column name into the UPDATE is safe.
+	 * @amount How much to add (default 1).
+	 */
+	function incrementCharacterStat( characterId, column, amount = 1 ) {
+		if ( isNull( arguments.characterId ) || !len( arguments.characterId ) ) {
+			return;
+		}
+		queryExecute(
+			"UPDATE characters SET #arguments.column# = #arguments.column# + :amount WHERE id = :characterId",
+			{ "amount": arguments.amount, "characterId": arguments.characterId },
+			{ datasource: "gameserver" }
+		);
+	}
+
+	/**
+	 * Splits `xp` evenly (rounded down) across every character in
+	 * `state.players` and awards each their share via awardExperience() —
+	 * everyone in the party benefits from a kill, not just whoever's
+	 * currently active/landed the blow. Downed-but-not-dead members still
+	 * get a share (this app has no "left the party" state to exclude
+	 * anyone by), matching the SRD's usual "everyone present splits it"
+	 * guidance. A party of one gets the full amount, same as before party
+	 * play existed.
+	 *
+	 * @state The encounter's full mutable game state struct.
+	 * @xp The opponent's total XP award, before splitting.
+	 */
+	function awardPartyExperience( state, xp ) {
+		var share = int( arguments.xp / arguments.state.players.len() );
+		if ( share <= 0 ) {
+			return;
+		}
+		for ( var member in arguments.state.players ) {
+			awardExperience( arguments.state, share, member );
+		}
+	}
+
+	/**
+	 * Awards `xp` to `player` specifically (see awardPartyExperience() for
+	 * the usual party-wide entry point every opponent-defeated call site
+	 * actually uses) — persists it immediately and cascades through as
+	 * many level-ups as the new total crosses thresholds for.
+	 *
+	 * @state The encounter's full mutable game state struct.
+	 * @xp The amount of XP being awarded to `player`.
+	 * @player The specific character struct being credited.
+	 */
+	function awardExperience( state, xp, player ) {
+		var player = arguments.player;
+
+		queryExecute(
+			"UPDATE characters SET experience_points = experience_points + :xp WHERE id = :characterId",
+			{ "xp": arguments.xp, "characterId": player.characterId },
+			{ datasource: "gameserver" }
+		);
+
+		var totals = queryExecute(
+			"SELECT experience_points FROM characters WHERE id = :characterId",
+			{ "characterId": player.characterId },
+			{ datasource: "gameserver" }
+		);
+		if ( totals.recordCount == 0 ) {
+			return; // no saved character record to advance (e.g. a test double)
+		}
+
+		var newTotalXp = totals.experience_points[ 1 ];
+		arguments.state.log.prepend( "#player.name# gains #arguments.xp# XP (#newTotalXp# total)." );
+
+		// `totalLevel` (sum across every class — see loadCharacter()) is what
+		// the XP table actually measures; a single-class character always has
+		// totalLevel == level, unchanged from before multiclassing existed.
+		var currentLevel = structKeyExists( player, "totalLevel" ) ? player.totalLevel : player.level;
+		var targetLevel = levelForXp( newTotalXp );
+		var leveledUp = false;
+		while ( currentLevel < targetLevel ) {
+			_levelUp( arguments.state, player );
+			currentLevel = structKeyExists( player, "totalLevel" ) ? player.totalLevel : player.level;
+			leveledUp = true;
+		}
+
+		if ( leveledUp ) {
+			// hit_points is persisted as the new max, not the character's
+			// (possibly damaged) current total — loadCharacter() always
+			// starts a fresh encounter at full HP (see there), so keeping
+			// hit_points in sync with max_hit_points avoids leaving a stale,
+			// no-longer-meaningful lower number sitting in the row.
+			queryExecute(
+				"UPDATE characters SET level = :level, proficiency_bonus = :proficiencyBonus, hit_points = :maxHitPoints, max_hit_points = :maxHitPoints WHERE id = :characterId",
+				{
+					"level": player.classes[ 1 ].level,
+					"proficiencyBonus": player.proficiencyBonus,
+					"maxHitPoints": player.maxHitPoints,
+					"characterId": player.characterId
+				},
+				{ datasource: "gameserver" }
+			);
+			// Any classes beyond the original one (see startMulticlass()) keep
+			// their own level in character_multiclass_levels — upserted here
+			// too in case this batch of level-ups landed on one of them.
+			for ( var i = 2; i <= player.classes.len(); i++ ) {
+				queryExecute(
+					"INSERT INTO character_multiclass_levels (character_id, class_id, level)
+					 VALUES (:characterId, :classId, :level)
+					 ON DUPLICATE KEY UPDATE level = :level",
+					{ "characterId": player.characterId, "classId": player.classes[ i ].classId, "level": player.classes[ i ].level },
+					{ datasource: "gameserver" }
+				);
+			}
+		}
+	}
+
+	/**
+	 * Rolls a defeated monster's gold (and a small chance of a Potion of
+	 * Healing) and persists it immediately — same "write straight to the DB
+	 * from here, no CharacterService dependency" approach awardExperience()
+	 * already uses for XP, and the same in-memory `state.player.gold`/
+	 * `state.items` mirroring default.bx's loot-POI grant does, so the
+	 * character sheet/HUD reflect it within this same request without a
+	 * full reload.
+	 *
+	 * Gold scales off the monster's own `xp` (already a CR proxy — see
+	 * _levelAppropriateCRRange()) rather than a separate treasure table per
+	 * monster: roughly xp/10 to xp/3, e.g. 2-8 gold for a Bandit (25 XP) up
+	 * to 45-150 for a CR 2 dragon wyrmling (450 XP).
+	 */
+	function grantMonsterLoot( state, defender ) {
+		var player = arguments.state.player;
+		if ( !structKeyExists( player, "characterId" ) ) {
+			return; // no saved character record to credit (e.g. a test double)
+		}
+		var existing = queryExecute(
+			"SELECT id FROM characters WHERE id = :characterId",
+			{ "characterId": player.characterId },
+			{ datasource: "gameserver" }
+		);
+		if ( existing.recordCount == 0 ) {
+			return; // characterId doesn't reference a real row (e.g. a test double)
+		}
+
+		var gold = randRange( max( 1, int( arguments.defender.xp / 10 ) ), max( 2, int( arguments.defender.xp / 3 ) ) );
+		queryExecute(
+			"UPDATE characters SET gold = gold + :gold WHERE id = :characterId",
+			{ "gold": gold, "characterId": player.characterId },
+			{ datasource: "gameserver" }
+		);
+		player.gold = ( structKeyExists( player, "gold" ) ? player.gold : 0 ) + gold;
+		var messages = [ "#gold# gold" ];
+
+		// 15% chance of a Potion of Healing — the one seeded item with a
+		// coded effect (see consumableEffects()); other seeded items are
+		// flavor/treasure, not worth rolling for here.
+		if ( randRange( 1, 100 ) <= 15 ) {
+			var itemRow = queryExecute(
+				"SELECT id FROM items WHERE name = 'Potion of Healing'",
+				{}, { datasource: "gameserver" }
+			);
+			if ( itemRow.recordCount > 0 ) {
+				queryExecute(
+					"INSERT INTO character_items (character_id, item_id, quantity)
+					 VALUES (:characterId, :itemId, 1)
+					 ON DUPLICATE KEY UPDATE quantity = quantity + 1",
+					{ "characterId": player.characterId, "itemId": itemRow.id[ 1 ] },
+					{ datasource: "gameserver" }
+				);
+				if ( structKeyExists( arguments.state, "items" ) ) {
+					var itemRows = queryExecute(
+						"SELECT ci.id, ci.quantity, i.name AS itemName, i.item_type, i.description
+						 FROM character_items ci JOIN items i ON i.id = ci.item_id
+						 WHERE ci.character_id = :characterId
+						 ORDER BY i.item_type, i.name",
+						{ "characterId": player.characterId }, { datasource: "gameserver" }
+					);
+					var refreshedItems = [];
+					for ( var inventoryRow in itemRows ) {
+						arrayAppend( refreshedItems, {
+							"id": inventoryRow.id, "itemName": inventoryRow.itemName, "itemType": inventoryRow.item_type,
+							"description": inventoryRow.description, "quantity": inventoryRow.quantity
+						} );
+					}
+					arguments.state.items = refreshedItems;
+				}
+				arrayAppend( messages, "a Potion of Healing" );
+			}
+		}
+
+		arguments.state.log.prepend( "#arguments.defender.name# drops #arrayToList( messages, " and " )#." );
+	}
+
+	/**
+	 * Returns the character level for a given total XP, per the Character
+	 * Advancement table (level = highest threshold met or exceeded).
+	 */
+	function levelForXp( xp ) {
+		var level = 1;
+		for ( var i = 1; i <= XP_THRESHOLDS.len(); i++ ) {
+			if ( arguments.xp >= XP_THRESHOLDS[ i ] ) {
+				level = i;
+			}
+		}
+		return level;
+	}
+
+	/**
+	 * Total XP required to reach a given level, per the Character Advancement
+	 * table — the inverse lookup of levelForXp(), exposed for callers outside
+	 * this class (e.g. the character-select API's XP progress bar) since
+	 * class-body constants like XP_THRESHOLDS aren't reachable externally.
+	 */
+	function xpForLevel( level ) {
+		if ( arguments.level < 1 || arguments.level > XP_THRESHOLDS.len() ) {
+			return 0;
+		}
+		return XP_THRESHOLDS[ arguments.level ];
+	}
+
+	/**
+	 * Finds the entry in `player.classes` that the next level-up applies to
+	 * (see `player.nextLevelClassId`, set by loadCharacter()/startMulticlass()/
+	 * setNextLevelClass()). If `nextLevelClassId` names a class the
+	 * character doesn't have yet (startMulticlass() only ever records
+	 * *intent*, not an actual level — see its doc comment), this is that
+	 * class's first level: a fresh level-0 entry is appended to
+	 * `player.classes` here so the caller's `level += 1` takes it to 1, same
+	 * as the original class's very first level. Falls back to the original
+	 * class (`classes[1]`) if `nextLevelClassId` is unset or names a class
+	 * that no longer exists (a stray/deleted id).
+	 */
+	private function _levelingClassFor( player ) {
+		for ( var classEntry in arguments.player.classes ) {
+			if ( classEntry.classId == arguments.player.nextLevelClassId ) {
+				return classEntry;
+			}
+		}
+		var newClassRows = queryExecute(
+			"SELECT id, name, hit_die FROM classes WHERE id = :classId",
+			{ "classId": arguments.player.nextLevelClassId },
+			{ datasource: "gameserver" }
+		);
+		if ( newClassRows.recordCount == 0 ) {
+			return arguments.player.classes[ 1 ];
+		}
+		var newClassEntry = {
+			"classId": newClassRows.id[ 1 ], "className": newClassRows.name[ 1 ],
+			"subclassId": javaCast( "null", 0 ), "level": 0, "hitDie": newClassRows.hit_die[ 1 ]
+		};
+		arrayAppend( arguments.player.classes, newClassEntry );
+		return newClassEntry;
+	}
+
+	/**
+	 * Applies one level's worth of advancement to `player`, per "Gaining a
+	 * Level": +1 Hit Die worth of HP (using the *leveling class's* fixed
+	 * value + Constitution modifier, minimum 1 — see
+	 * _levelingClassFor()/multiclassing above), an increased Proficiency
+	 * Bonus (by total character level) at the levels that grant one
+	 * (bumping equipped weapons' attack bonus to match), and any new class
+	 * features that class unlocks at its new level.
+	 *
+	 * @state The encounter's full mutable game state struct.
+	 * @player The specific character struct leveling up.
+	 */
+	private function _levelUp( state, player ) {
+		var player = arguments.player;
+		var levelingClass = _levelingClassFor( player );
+		levelingClass.level += 1;
+		// `player.level`/`hitDiceMax` mirror the original class specifically
+		// (used for its own short-rest hit-die size) — kept in sync only
+		// when the original class is the one gaining this level.
+		if ( levelingClass.classId == player.classes[ 1 ].classId ) {
+			player.level = levelingClass.level;
+		}
+		player.totalLevel += 1;
+		player.hitDiceMax = player.totalLevel;
+
+		// A caster's slot count is level-dependent (and a half-caster's very
+		// first slot unlocks at level 2) — recompute immediately so a level-up
+		// mid-encounter doesn't leave them with a stale (often empty)
+		// spellSlots table until their next fresh character load. Same idea
+		// for a Barbarian's max Rage uses, which also increases with level.
+		variables.spellcasting.recomputeSpellSlots( player );
+		variables.rules.recomputeRagesRemaining( player );
+
+		// Dwarven Toughness adds +1 per level on top of the normal Hit Die gain.
+		var hpBonusPerLevel = structKeyExists( player, "hpBonusPerLevel" ) ? player.hpBonusPerLevel : 0;
+		var hitPointsPerLevel = variables.rules.fixedHitPointsPerLevel( levelingClass.hitDie );
+		var hpGain = max( 1, hitPointsPerLevel + player.modifiers.con ) + hpBonusPerLevel;
+		player.maxHitPoints += hpGain;
+		player.hitPoints += hpGain;
+
+		var newProficiencyBonus = variables.rules.proficiencyBonusForLevel( player.totalLevel );
+		var proficiencyIncreased = ( newProficiencyBonus > player.proficiencyBonus );
+		if ( proficiencyIncreased ) {
+			var bonusIncrease = newProficiencyBonus - player.proficiencyBonus;
+			player.proficiencyBonus = newProficiencyBonus;
+			for ( var item in player.inventory ) {
+				if ( item.equipped ) {
+					item.attackBonus += bonusIncrease;
+				}
+			}
+		}
+
+		var newFeatureNames = _grantNewFeatures(
+			player, levelingClass.classId, isNull( levelingClass.subclassId ) ? 0 : levelingClass.subclassId, levelingClass.level
+		);
+
+		arguments.state.log.prepend(
+			"#player.name# reaches character level #player.totalLevel# (#levelingClass.className# #levelingClass.level#)! +#hpGain# HP" &
+			( proficiencyIncreased ? ", Proficiency Bonus now +#player.proficiencyBonus#" : "" ) &
+			( newFeatureNames.len() ? ", gains #arrayToList( newFeatureNames, ", " )#" : "" ) &
+			"."
+		);
+	}
+
+	/**
+	 * Every class in the current dataset unlocks its (sole) subclass at
+	 * level 3 — see class_features rows with a non-null subclass_id.
+	 * Returns `{ pending, availableSubclasses }`: `pending` is true once
+	 * `characterId` has reached that level without a subclass chosen yet
+	 * (this doesn't auto-assign it — the player chooses via chooseSubclass(),
+	 * from the character sheet, and can leave it pending indefinitely);
+	 * `availableSubclasses` is `[{id, name, tagline}]` for the character's
+	 * class (currently always exactly one, but shaped for a class ever
+	 * having more).
+	 */
+	function pendingSubclassChoice( characterId ) {
+		var charRow = queryExecute(
+			"SELECT class_id, subclass_id, level FROM characters WHERE id = :characterId",
+			{ "characterId": arguments.characterId },
+			{ datasource: "gameserver" }
+		);
+		if ( charRow.recordCount == 0 || !isNull( charRow.subclass_id[ 1 ] ) ) {
+			return { "pending": false, "availableSubclasses": [] };
+		}
+
+		var subclassRows = queryExecute(
+			"SELECT s.id, s.name, s.tagline, MIN(cf.level) AS unlockLevel
+			 FROM subclasses s JOIN class_features cf ON cf.subclass_id = s.id
+			 WHERE s.class_id = :classId
+			 GROUP BY s.id, s.name, s.tagline",
+			{ "classId": charRow.class_id[ 1 ] },
+			{ datasource: "gameserver" }
+		);
+		if ( subclassRows.recordCount == 0 || subclassRows.unlockLevel[ 1 ] > charRow.level[ 1 ] ) {
+			return { "pending": false, "availableSubclasses": [] };
+		}
+
+		var availableSubclasses = [];
+		for ( var row in subclassRows ) {
+			availableSubclasses.append( { "id": row.id, "name": row.name, "tagline": row.tagline } );
+		}
+		return { "pending": true, "availableSubclasses": availableSubclasses };
+	}
+
+	/**
+	 * Assigns `characterId`'s subclass and retroactively grants every
+	 * subclass feature at or below their current level (in case they leveled
+	 * past the unlock level before choosing) — the character sheet's
+	 * "Choose Your Subclass" panel's action, per pendingSubclassChoice().
+	 */
+	function chooseSubclass( characterId, subclassId ) {
+		var charRow = queryExecute(
+			"SELECT level FROM characters WHERE id = :characterId",
+			{ "characterId": arguments.characterId },
+			{ datasource: "gameserver" }
+		);
+		if ( charRow.recordCount == 0 ) {
+			return;
+		}
+		queryExecute(
+			"UPDATE characters SET subclass_id = :subclassId WHERE id = :characterId",
+			{ "subclassId": arguments.subclassId, "characterId": arguments.characterId },
+			{ datasource: "gameserver" }
+		);
+		var featureRows = queryExecute(
+			"SELECT id FROM class_features WHERE subclass_id = :subclassId AND level <= :level",
+			{ "subclassId": arguments.subclassId, "level": charRow.level[ 1 ] },
+			{ datasource: "gameserver" }
+		);
+		for ( var row in featureRows ) {
+			queryExecute(
+				"INSERT IGNORE INTO character_features (character_id, class_feature_id) VALUES (:characterId, :featureId)",
+				{ "characterId": arguments.characterId, "featureId": row.id },
+				{ datasource: "gameserver" }
+			);
+		}
+	}
+
+	/**
+	 * True if `abilityScores` meets the Multiclassing ability-score
+	 * prerequisite described by `primaryAbilityText` — the exact text
+	 * already stored in `classes.primary_ability` (e.g. "Strength or
+	 * Dexterity" for Fighter, "Strength and Charisma" for Paladin, a bare
+	 * "Wisdom" for Cleric), which happens to already match the SRD's
+	 * multiclassing prerequisite table for every class in this dataset.
+	 * "and" requires every named ability at 13+; "or" requires any one of
+	 * them; a single ability name requires just that one. Empty/unrecognized
+	 * text never blocks (treated as "no prerequisite" rather than silently
+	 * excluding every class from multiclass options). Public (like
+	 * hasSpellResource()/variables.spellcasting.multiclassCasterLevel()) so this string-parsing —
+	 * easy to get subtly wrong around "and" vs. "or" and the 13 boundary —
+	 * has a direct unit test, independent of multiclassOptions()'s DB query.
+	 */
+	function meetsMulticlassPrerequisite( abilityScores, primaryAbilityText ) {
+		var text = trim( arguments.primaryAbilityText );
+		if ( !len( text ) ) {
+			return true;
+		}
+		var abilityAbbrevByName = {
+			"strength": "str", "dexterity": "dex", "constitution": "con",
+			"intelligence": "int", "wisdom": "wis", "charisma": "cha"
+		};
+		var requireAll = findNoCase( " and ", text ) > 0;
+		var separator = requireAll ? " and " : " or ";
+		// `true` as the 4th arg treats `separator` as one literal delimiter
+		// string rather than a set of delimiter characters — same listToArray()
+		// usage already relied on elsewhere for this kind of " and "-joined
+		// SRD text (see the savingThrowProficiencies parsing in loadCharacter()).
+		var parts = ( findNoCase( separator, text ) > 0 ) ? listToArray( text, separator, false, true ) : [ text ];
+		var anyMet = false;
+		var allMet = true;
+		for ( var part in parts ) {
+			var abbrev = abilityAbbrevByName.keyExists( lCase( trim( part ) ) ) ? abilityAbbrevByName[ lCase( trim( part ) ) ] : "";
+			var met = len( abbrev ) && structKeyExists( arguments.abilityScores, abbrev ) && arguments.abilityScores[ abbrev ] >= 13;
+			anyMet = anyMet || met;
+			allMet = allMet && met;
+		}
+		return requireAll ? allMet : anyMet;
+	}
+
+	/**
+	 * Classes `characterId` could multiclass into right now: every class
+	 * they don't already have, whose own ability-score prerequisite they
+	 * meet — provided they also still meet the prerequisite for every class
+	 * they've *already* taken (the real "you need 13+ in your current
+	 * class's primary ability too" multiclassing rule). Returns
+	 * `[{id, name, primaryAbility}, ...]`, empty if none qualify. Never
+	 * auto-applied — the player picks via startMulticlass(), same
+	 * skippable/revisitable pattern as pendingSubclassChoice().
+	 */
+	function multiclassOptions( characterId ) {
+		var charRow = queryExecute(
+			"SELECT class_id, str, dex, con, int_score, wis, cha FROM characters WHERE id = :characterId",
+			{ "characterId": arguments.characterId },
+			{ datasource: "gameserver" }
+		);
+		if ( charRow.recordCount == 0 ) {
+			return [];
+		}
+		var abilityScores = {
+			"str": charRow.str[ 1 ], "dex": charRow.dex[ 1 ], "con": charRow.con[ 1 ],
+			"int": charRow.int_score[ 1 ], "wis": charRow.wis[ 1 ], "cha": charRow.cha[ 1 ]
+		};
+
+		var takenRows = queryExecute(
+			"SELECT id, primary_ability FROM classes WHERE id = :classId
+			 UNION
+			 SELECT cl.id, cl.primary_ability FROM character_multiclass_levels cml
+			 JOIN classes cl ON cl.id = cml.class_id WHERE cml.character_id = :characterId",
+			{ "classId": charRow.class_id[ 1 ], "characterId": arguments.characterId },
+			{ datasource: "gameserver" }
+		);
+		var takenClassIds = [];
+		var meetsAllTakenPrereqs = true;
+		for ( var row in takenRows ) {
+			arrayAppend( takenClassIds, row.id );
+			if ( !meetsMulticlassPrerequisite( abilityScores, row.primary_ability ) ) {
+				meetsAllTakenPrereqs = false;
+			}
+		}
+		if ( !meetsAllTakenPrereqs ) {
+			return [];
+		}
+
+		var candidateRows = queryExecute( "SELECT id, name, primary_ability FROM classes ORDER BY name", {}, { datasource: "gameserver" } );
+		var options = [];
+		for ( var row in candidateRows ) {
+			if ( arrayFind( takenClassIds, row.id ) > 0 ) {
+				continue;
+			}
+			if ( meetsMulticlassPrerequisite( abilityScores, row.primary_ability ) ) {
+				arrayAppend( options, { "id": row.id, "name": row.name, "primaryAbility": row.primary_ability } );
+			}
+		}
+		return options;
+	}
+
+	/**
+	 * Declares intent to multiclass into `classId` — validated against
+	 * multiclassOptions() so a stray/invalid id can't bypass the ability-score
+	 * prerequisite. Only redirects future automatic level-ups (`_levelUp()`,
+	 * via `next_level_class_id`) at the new class; grants nothing by itself.
+	 * A character doesn't actually gain a level (HP, features, a real row in
+	 * `character_multiclass_levels`) in the new class until they've earned
+	 * enough XP for their *next* character level and `_levelUp()` fires
+	 * naturally — multiclassing redirects where that next level goes, it
+	 * doesn't hand out a free one. See _levelingClassFor(), which creates the
+	 * actual level-1 entry (and grants its features) the moment that happens.
+	 */
+	function startMulticlass( characterId, classId ) {
+		var options = multiclassOptions( arguments.characterId );
+		var isValid = false;
+		for ( var option in options ) {
+			if ( option.id == arguments.classId ) {
+				isValid = true;
+			}
+		}
+		if ( !isValid ) {
+			return;
+		}
+		queryExecute(
+			"UPDATE characters SET next_level_class_id = :classId WHERE id = :characterId",
+			{ "classId": arguments.classId, "characterId": arguments.characterId },
+			{ datasource: "gameserver" }
+		);
+	}
+
+	/**
+	 * Redirects future automatic level-ups (`_levelUp()`) to `classId` —
+	 * always available once a character has multiclassed, so the player can
+	 * change which class their next kill's XP advances at any time from the
+	 * character sheet. A no-op if `classId` isn't one of the character's
+	 * original or multiclass classes (guards against a stray id) — use
+	 * startMulticlass() instead to redirect at a class not yet taken.
+	 */
+	function setNextLevelClass( characterId, classId ) {
+		var validRows = queryExecute(
+			"SELECT class_id FROM characters WHERE id = :characterId AND class_id = :classId
+			 UNION
+			 SELECT class_id FROM character_multiclass_levels WHERE character_id = :characterId AND class_id = :classId",
+			{ "characterId": arguments.characterId, "classId": arguments.classId },
+			{ datasource: "gameserver" }
+		);
+		if ( validRows.recordCount == 0 ) {
+			return;
+		}
+		queryExecute(
+			"UPDATE characters SET next_level_class_id = :classId WHERE id = :characterId",
+			{ "classId": arguments.classId, "characterId": arguments.characterId },
+			{ datasource: "gameserver" }
+		);
+	}
+
+	/**
+	 * Grants `player` any class features of `classId` at `level` (the class
+	 * that's just gained this level — see _levelingClassFor(); for a
+	 * single-class character this is always their one class), from the
+	 * gameserver rule set — adding them to `player.features` and recording
+	 * them against the persisted character. A subclass feature is only
+	 * included once the player has actually chosen a subclass for that
+	 * class (see chooseSubclass()/startMulticlass()) — reaching the unlock
+	 * level alone doesn't grant them. Returns the names of any features
+	 * gained.
+	 *
+	 * @subclassId Pass 0 (not a real id) for "no subclass chosen yet" — avoids binding a SQL NULL parameter.
+	 */
+	private function _grantNewFeatures( player, classId, subclassId, level ) {
+		var names = [];
+
+		var rows = queryExecute(
+			"SELECT id, name FROM class_features
+			 WHERE class_id = :classId AND level = :level
+			   AND ( subclass_id IS NULL OR subclass_id = :subclassId )",
+			{ "classId": arguments.classId, "level": arguments.level, "subclassId": arguments.subclassId },
+			{ datasource: "gameserver" }
+		);
+
+		for ( var row in rows ) {
+			arrayAppend( names, row.name );
+			arrayAppend( arguments.player.features, row.name );
+			queryExecute(
+				"INSERT IGNORE INTO character_features (character_id, class_feature_id) VALUES (:characterId, :featureId)",
+				{ "characterId": arguments.player.characterId, "featureId": row.id },
+				{ datasource: "gameserver" }
+			);
+
+			// Fighting Style (Fighter 1/7, Paladin/Ranger 2): the class
+			// feature itself is recorded above like any other; the specific
+			// style is a player choice made afterward on the character
+			// sheet (see pendingFightingStyleChoice()/grantFightingStyle()),
+			// not auto-picked.
+
+			// Ability Score Improvement: queue it instead of auto-applying —
+			// the player chooses which ability/abilities to raise via the
+			// level-up screen (see applyAbilityScoreImprovement()). Queued as
+			// a count rather than a flag since a big enough XP award can carry
+			// the player through more than one ASI-granting level at once.
+			if ( row.name == "Ability Score Improvement" ) {
+				arguments.player.pendingAbilityScoreImprovements = (
+					structKeyExists( arguments.player, "pendingAbilityScoreImprovements" ) ? arguments.player.pendingAbilityScoreImprovements : 0
+				) + 1;
+				names[ names.len() ] = "an Ability Score Improvement (choose below)";
+			}
+		}
+		return names;
+	}
+
+	/**
+	 * Applies a player-chosen Ability Score Improvement, consuming one of the
+	 * character's `pendingAbilityScoreImprovements` (queued by
+	 * _grantNewFeatures() instead of auto-applying it) — either +2 to one
+	 * ability, or +1 to two different ones, per the "Ability Scores"
+	 * increase rule, each capped at 20. A no-op if there's no pending
+	 * improvement to spend, or if `choice.abilities` isn't 1 or 2 entries.
+	 * (This app doesn't model the alternative — taking a feat instead of an
+	 * ability increase — since it has no broader feat-selection UI at all.)
+	 *
+	 * @state The encounter's full mutable game state struct.
+	 * @choice `{ "abilities": [ "str" ] }` for +2 to one ability, or `{ "abilities": [ "str", "dex" ] }` for +1 to two.
+	 */
+	function applyAbilityScoreImprovement( state, choice ) {
+		var player = arguments.state.player;
+		if ( !structKeyExists( player, "pendingAbilityScoreImprovements" ) || player.pendingAbilityScoreImprovements <= 0 ) {
+			return;
+		}
+		var abilities = arguments.choice.abilities;
+		if ( abilities.len() != 1 && abilities.len() != 2 ) {
+			return;
+		}
+
+		var amountEach = ( abilities.len() == 1 ) ? 2 : 1;
+		var improvedNames = [];
+		for ( var abbrev in abilities ) {
+			var improvedName = _increaseAbilityScore( player, abbrev, amountEach );
+			if ( len( improvedName ) ) {
+				improvedNames.append( "+#amountEach# #improvedName#" );
+			}
+		}
+
+		player.pendingAbilityScoreImprovements -= 1;
+		arguments.state.log.prepend(
+			improvedNames.len()
+				? "#player.name# improves their abilities: #arrayToList( improvedNames, ", " )#."
+				: "#player.name#'s chosen abilities are already at the maximum of 20."
+		);
+	}
+
+	/**
+	 * Raises `player`'s `abbrev` ability score by `amount` (capped at 20),
+	 * updating its modifier and any AC/equipped-weapon bonuses derived from
+	 * it, then persisting the change — shared by applyAbilityScoreImprovement()
+	 * for both the "+2 to one ability" and "+1 to two abilities" choices.
+	 * Returns the full ability name raised (e.g. "Strength"), or "" if
+	 * already at the cap.
+	 */
+	private function _increaseAbilityScore( player, abbrev, amount ) {
+		var oldScore = arguments.player.abilityScores[ arguments.abbrev ];
+		if ( oldScore >= 20 ) {
+			return "";
+		}
+		var newScore = min( 20, oldScore + arguments.amount );
+		var oldMod = arguments.player.modifiers[ arguments.abbrev ];
+		var newMod = variables.rules.abilityModifier( newScore );
+		arguments.player.abilityScores[ arguments.abbrev ] = newScore;
+		arguments.player.modifiers[ arguments.abbrev ] = newMod;
+		var modDelta = newMod - oldMod;
+
+		if ( modDelta != 0 ) {
+			if ( arguments.abbrev == "dex" ) {
+				arguments.player.armorClass += modDelta;
+			}
+			for ( var item in arguments.player.inventory ) {
+				if ( item.equipped && ( ( item.category == "melee" && arguments.abbrev == "str" ) || ( item.category == "ranged" && arguments.abbrev == "dex" ) ) ) {
+					item.attackBonus += modDelta;
+					item.damageBonus += modDelta;
+					if ( structKeyExists( item, "id" ) ) {
+						queryExecute(
+							"UPDATE character_inventory SET attack_bonus = :attackBonus, damage_bonus = :damageBonus WHERE id = :id",
+							{ "attackBonus": item.attackBonus, "damageBonus": item.damageBonus, "id": item.id },
+							{ datasource: "gameserver" }
+						);
+					}
+				}
+			}
+		}
+
+		if ( structKeyExists( arguments.player, "characterId" ) ) {
+			var dbColumns = { "str": "str", "dex": "dex", "con": "con", "int": "int_score", "wis": "wis", "cha": "cha" };
+			queryExecute(
+				"UPDATE characters SET #dbColumns[ arguments.abbrev ]# = :score, armor_class = :armorClass WHERE id = :characterId",
+				{ "score": newScore, "armorClass": arguments.player.armorClass, "characterId": arguments.player.characterId },
+				{ datasource: "gameserver" }
+			);
+		}
+
+		var abilityFullNames = { "str": "Strength", "dex": "Dexterity", "con": "Constitution", "int": "Intelligence", "wis": "Wisdom", "cha": "Charisma" };
+		return abilityFullNames[ arguments.abbrev ];
+	}
+
+	/**
+	 * The subset of LEVEL_UP_FEAT_NAMES `player` can still pick — every
+	 * repeatable feat (Magic Initiate, Skilled — feats.repeatable), plus any
+	 * non-repeatable one they don't already have.
+	 */
+	function availableLevelUpFeats( player ) {
+		var repeatableRows = queryExecute(
+			"SELECT name FROM feats WHERE repeatable = 1", {}, { datasource: "gameserver" }
+		);
+		var repeatableNames = [];
+		for ( var row in repeatableRows ) {
+			repeatableNames.append( row.name );
+		}
+
+		var available = [];
+		for ( var featName in LEVEL_UP_FEAT_NAMES ) {
+			var alreadyHas = structKeyExists( arguments.player, "feats" ) && arrayFindNoCase( arguments.player.feats, featName ) > 0;
+			if ( !alreadyHas || arrayFindNoCase( repeatableNames, featName ) > 0 ) {
+				available.append( featName );
+			}
+		}
+		return available;
+	}
+
+	/**
+	 * Grants `featName` (one of LEVEL_UP_FEAT_NAMES) to the player in place
+	 * of an Ability Score Improvement, consuming one of their
+	 * pendingAbilityScoreImprovements — the level-up screen's other choice,
+	 * alongside applyAbilityScoreImprovement(). A no-op if there's no
+	 * pending improvement to spend, or `featName` isn't a real feat.
+	 *
+	 * Re-picking a repeatable feat (Magic Initiate, Skilled) still applies
+	 * its mechanical effect (e.g. Skilled grants 3 more skills) even though
+	 * `character_feats` has a UNIQUE(character_id, feat_id) constraint that
+	 * silently no-ops the second row — this app doesn't track how many
+	 * times a feat's been taken, just whether it's held at all.
+	 *
+	 * @state The encounter's full mutable game state struct.
+	 * @featName One of LEVEL_UP_FEAT_NAMES.
+	 * @chosenSkills For "Skilled" only: up to 3 skill names the player picked
+	 *  (see the level-up screen's secondary skill picker) — ignored for any
+	 *  other feat.
+	 */
+	function grantChosenFeat( state, featName, chosenSkills = [] ) {
+		var player = arguments.state.player;
+		if ( !structKeyExists( player, "pendingAbilityScoreImprovements" ) || player.pendingAbilityScoreImprovements <= 0 ) {
+			return;
+		}
+		if ( arguments.featName == "Skilled" && arguments.chosenSkills.len() != 3 ) {
+			return;
+		}
+		var featRows = queryExecute(
+			"SELECT id FROM feats WHERE name = :name",
+			{ "name": arguments.featName },
+			{ datasource: "gameserver" }
+		);
+		if ( featRows.recordCount == 0 ) {
+			return;
+		}
+
+		if ( structKeyExists( player, "characterId" ) ) {
+			queryExecute(
+				"INSERT IGNORE INTO character_feats (character_id, feat_id) VALUES (:characterId, :featId)",
+				{ "characterId": player.characterId, "featId": featRows.id[ 1 ] },
+				{ datasource: "gameserver" }
+			);
+		}
+		if ( arrayFindNoCase( player.feats, arguments.featName ) == 0 ) {
+			arrayAppend( player.feats, arguments.featName );
+		}
+		player.pendingAbilityScoreImprovements -= 1;
+
+		if ( arguments.featName == "Skilled" ) {
+			_grantSkilledSkills( player, arguments.chosenSkills );
+		}
+
+		if ( arguments.featName == "Magic Initiate" && structKeyExists( player, "characterId" ) ) {
+			queryExecute(
+				"UPDATE characters SET pending_magic_initiate_cantrips = 2, pending_magic_initiate_spell = 1 WHERE id = :characterId",
+				{ "characterId": player.characterId },
+				{ datasource: "gameserver" }
+			);
+			player.hasMagicInitiate = true;
+			variables.spellcasting.assignSpellcasting( player );
+		}
+
+		arguments.state.log.prepend( "#player.name# takes the #arguments.featName# feat instead of an Ability Score Improvement." );
+	}
+
+	/**
+	 * Skilled: grants proficiency in the (up to 3) player-chosen `skills` the
+	 * character doesn't already have — persisted the same way a class's
+	 * chosen skills are (characters.chosen_skill_proficiencies).
+	 */
+	private function _grantSkilledSkills( player, skills ) {
+		var newSkills = [];
+		for ( var skill in arguments.skills ) {
+			if ( arrayFindNoCase( arguments.player.skillProficiencies, skill ) == 0 && arrayFindNoCase( newSkills, skill ) == 0 ) {
+				newSkills.append( skill );
+				arrayAppend( arguments.player.skillProficiencies, skill );
+			}
+		}
+		if ( !newSkills.len() || !structKeyExists( arguments.player, "characterId" ) ) {
+			return;
+		}
+
+		var charRow = queryExecute(
+			"SELECT chosen_skill_proficiencies FROM characters WHERE id = :characterId",
+			{ "characterId": arguments.player.characterId },
+			{ datasource: "gameserver" }
+		);
+		var storedSkills = ( charRow.recordCount > 0 && len( charRow.chosen_skill_proficiencies[ 1 ] ) )
+			? listToArray( charRow.chosen_skill_proficiencies[ 1 ], "," )
+			: [];
+		for ( var skill in newSkills ) {
+			storedSkills.append( skill );
+		}
+		queryExecute(
+			"UPDATE characters SET chosen_skill_proficiencies = :skills WHERE id = :characterId",
+			{ "skills": arrayToList( storedSkills, "," ), "characterId": arguments.player.characterId },
+			{ datasource: "gameserver" }
+		);
+	}
+
+	/**
+	 * The pickable Fighting Style names — see FIGHTING_STYLE_NAMES.
+	 */
+	function fightingStyleNames() {
+		return FIGHTING_STYLE_NAMES;
+	}
+
+	/**
+	 * Grants a specific, player-chosen Fighting Style feat. Returns true if
+	 * granted, false for an unrecognized style name or missing feat row.
+	 *
+	 * @characterId characters.id to grant the feat to.
+	 * @styleName One of FIGHTING_STYLE_NAMES.
+	 */
+	function grantFightingStyle( characterId, styleName ) {
+		if ( arrayFindNoCase( FIGHTING_STYLE_NAMES, arguments.styleName ) == 0 ) {
+			return false;
+		}
+		var featRows = queryExecute(
+			"SELECT id FROM feats WHERE name = :name",
+			{ "name": arguments.styleName },
+			{ datasource: "gameserver" }
+		);
+		if ( featRows.recordCount == 0 ) {
+			return false;
+		}
+		queryExecute(
+			"INSERT IGNORE INTO character_feats (character_id, feat_id) VALUES (:characterId, :featId)",
+			{ "characterId": arguments.characterId, "featId": featRows.id[ 1 ] },
+			{ datasource: "gameserver" }
+		);
+		return true;
+	}
+
+	/**
+	 * Whether `characterId` has an un-chosen Fighting Style waiting (Fighter
+	 * gets one at level 1 and a second, "Additional Fighting Style", at
+	 * level 7; Paladin/Ranger get one at level 2) — compares how many
+	 * Fighting-Style-granting class features have been recorded against how
+	 * many Fighting Style feats have actually been chosen, since a
+	 * character can be due more than one over their career. Returns
+	 * `{ pending, availableStyles }` — `availableStyles` excludes any style
+	 * already held (can't pick the same one twice).
+	 */
+	function pendingFightingStyleChoice( characterId ) {
+		var unlockedRows = queryExecute(
+			"SELECT COUNT(*) AS unlockedCount FROM character_features chf
+			 JOIN class_features cf ON cf.id = chf.class_feature_id
+			 WHERE chf.character_id = :characterId AND cf.name IN ('Fighting Style', 'Additional Fighting Style')",
+			{ "characterId": arguments.characterId },
+			{ datasource: "gameserver" }
+		);
+		var chosenRows = queryExecute(
+			"SELECT f.name FROM character_feats chf JOIN feats f ON f.id = chf.feat_id WHERE chf.character_id = :characterId",
+			{ "characterId": arguments.characterId },
+			{ datasource: "gameserver" }
+		);
+		var chosenNames = [];
+		var chosenStyleCount = 0;
+		for ( var row in chosenRows ) {
+			chosenNames.append( row.name );
+			if ( arrayFindNoCase( FIGHTING_STYLE_NAMES, row.name ) > 0 ) {
+				chosenStyleCount += 1;
+			}
+		}
+
+		var pending = unlockedRows.unlockedCount[ 1 ] > chosenStyleCount;
+		var availableStyles = [];
+		if ( pending ) {
+			for ( var style in FIGHTING_STYLE_NAMES ) {
+				if ( arrayFindNoCase( chosenNames, style ) == 0 ) {
+					availableStyles.append( style );
+				}
+			}
+		}
+		return { "pending": pending, "availableStyles": availableStyles };
+	}
+
+	/**
+	 * Whether `characterId` has an Expertise pick waiting (Rogue 1, Bard 2,
+	 * Ranger 9 in this dataset — each grants exactly one "choose 2 skills"
+	 * Expertise, not stacking further) — compares how many Expertise-granting
+	 * class features have been recorded (each worth 2 skills) against how
+	 * many Expertise skills have actually been chosen. Returns
+	 * `{ pending, availableSkills }` — `availableSkills` is the character's
+	 * own skill proficiencies not already given Expertise (Expertise can
+	 * only be applied to a skill you're already proficient in).
+	 */
+	function pendingExpertiseChoice( characterId ) {
+		var charRow = queryExecute(
+			"SELECT chosen_skill_proficiencies, expertise_skills, species, background FROM characters WHERE id = :characterId",
+			{ "characterId": arguments.characterId },
+			{ datasource: "gameserver" }
+		);
+		if ( charRow.recordCount == 0 ) {
+			return { "pending": false, "availableSkills": [] };
+		}
+		var unlockedRows = queryExecute(
+			"SELECT COUNT(*) AS unlockedCount FROM character_features chf
+			 JOIN class_features cf ON cf.id = chf.class_feature_id
+			 WHERE chf.character_id = :characterId AND cf.name = 'Expertise'",
+			{ "characterId": arguments.characterId },
+			{ datasource: "gameserver" }
+		);
+		var expertiseSkills = len( charRow.expertise_skills[ 1 ] ) ? listToArray( charRow.expertise_skills[ 1 ] ) : [];
+		var pending = ( unlockedRows.unlockedCount[ 1 ] * 2 ) > expertiseSkills.len();
+		var availableSkills = [];
+		if ( pending ) {
+			var speciesMechanics = variables.rules.resolveSpeciesMechanics( len( charRow.species[ 1 ] ) ? charRow.species[ 1 ] : "" );
+			var skillProficiencies = variables.rules.skillProficienciesFromTraits( speciesMechanics.traitNames, charRow.background[ 1 ] );
+			if ( len( charRow.chosen_skill_proficiencies[ 1 ] ) ) {
+				for ( var chosenSkill in listToArray( charRow.chosen_skill_proficiencies[ 1 ], "," ) ) {
+					if ( arrayFindNoCase( skillProficiencies, chosenSkill ) == 0 ) {
+						skillProficiencies.append( chosenSkill );
+					}
+				}
+			}
+			for ( var skill in skillProficiencies ) {
+				if ( arrayFindNoCase( expertiseSkills, skill ) == 0 ) {
+					availableSkills.append( skill );
+				}
+			}
+		}
+		return { "pending": pending, "availableSkills": availableSkills };
+	}
+
+	/**
+	 * Grants Expertise in one already-proficient skill, per
+	 * pendingExpertiseChoice() — the character sheet's "Choose Expertise"
+	 * panel's action. A no-op if the skill is already an Expertise pick.
+	 */
+	function chooseExpertise( characterId, skillName ) {
+		var current = queryExecute(
+			"SELECT expertise_skills FROM characters WHERE id = :characterId",
+			{ "characterId": arguments.characterId },
+			{ datasource: "gameserver" }
+		);
+		if ( current.recordCount == 0 ) {
+			return;
+		}
+		var expertiseSkills = len( current.expertise_skills[ 1 ] ) ? listToArray( current.expertise_skills[ 1 ] ) : [];
+		if ( arrayFindNoCase( expertiseSkills, arguments.skillName ) > 0 ) {
+			return;
+		}
+		expertiseSkills.append( arguments.skillName );
+		queryExecute(
+			"UPDATE characters SET expertise_skills = :skills WHERE id = :characterId",
+			{ "skills": arrayToList( expertiseSkills, "," ), "characterId": arguments.characterId },
+			{ datasource: "gameserver" }
+		);
+	}
+
+	/**
+	 * Simplified cantrips-known-by-level rule shared by every full-caster
+	 * class (the SRD's actual per-class tables vary slightly — e.g. Cleric
+	 * gains its 4th cantrip at level 4, Warlock's tables differ further
+	 * still — collapsed here to one curve, a deliberate simplification
+	 * matching how this app already treats "spells known" more broadly).
+	 * Half-casters (Paladin, Ranger) and Magic Initiate don't grow their
+	 * cantrip count at all, so this only applies to FULL_CASTER_CLASSES.
+	 */
+	function expectedCantripCount( level ) {
+		if ( arguments.level >= 10 ) {
+			return 4;
+		} else if ( arguments.level >= 4 ) {
+			return 3;
+		}
+		return 2;
+	}
+
+	/**
+	 * Whether `characterId` (a full-caster class) has fewer known cantrips
+	 * than their level should grant (see expectedCantripCount()) —
+	 * compares that expected count against `known_cantrips`' actual length,
+	 * never auto-granting the difference. Returns
+	 * `{ pending, availableCantrips }`; `availableCantrips` is every
+	 * castable cantrip for the class not already known.
+	 */
+	function pendingCantripChoice( characterId ) {
+		var charRow = queryExecute(
+			"SELECT cl.name AS className, c.level, c.known_cantrips
+			 FROM characters c JOIN classes cl ON cl.id = c.class_id
+			 WHERE c.id = :characterId",
+			{ "characterId": arguments.characterId },
+			{ datasource: "gameserver" }
+		);
+		if ( charRow.recordCount == 0 || !variables.spellcasting.isFullCasterClass( charRow.className[ 1 ] ) ) {
+			return { "pending": false, "availableCantrips": [] };
+		}
+
+		var knownNames = len( charRow.known_cantrips[ 1 ] ) ? listToArray( charRow.known_cantrips[ 1 ] ) : [];
+		var pending = knownNames.len() < expectedCantripCount( charRow.level[ 1 ] );
+		var availableCantrips = [];
+		if ( pending ) {
+			for ( var cantrip in variables.spellcasting.listCastableSpells( charRow.className[ 1 ], 0 ) ) {
+				if ( arrayFindNoCase( knownNames, cantrip.name ) == 0 ) {
+					availableCantrips.append( cantrip );
+				}
+			}
+		}
+		return { "pending": pending, "availableCantrips": availableCantrips };
+	}
+
+	/**
+	 * Records a player-chosen new cantrip against `characterId`, per
+	 * pendingCantripChoice() — the character sheet's "Learn a Cantrip"
+	 * panel's action. A no-op if the cantrip is already known.
+	 */
+	function chooseCantrip( characterId, cantripName ) {
+		_appendKnownSpellName( arguments.characterId, "known_cantrips", arguments.cantripName );
+	}
+
+	/**
+	 * Whether `characterId` has unlocked a new maximum spell-slot level
+	 * (via the SPELL_SLOTS_FULL_CASTER/HALF_CASTER tables) that they don't
+	 * yet have a known spell of — e.g. reaching level 3 unlocks 2nd-level
+	 * slots, so they're due a 2nd-level spell pick. Only ever grants one
+	 * spell per unlocked level, matching how a level-1 character starts
+	 * with exactly one 1st-level spell. Returns
+	 * `{ pending, availableSpells, level }` — `level` is the highest
+	 * spell level they're due a pick for; `availableSpells` excludes any
+	 * spell of that level already known.
+	 */
+	function pendingSpellChoice( characterId ) {
+		var charRow = queryExecute(
+			"SELECT cl.name AS className, c.level, c.known_spells
+			 FROM characters c JOIN classes cl ON cl.id = c.class_id
+			 WHERE c.id = :characterId",
+			{ "characterId": arguments.characterId },
+			{ datasource: "gameserver" }
+		);
+		if ( charRow.recordCount == 0 ) {
+			return { "pending": false, "availableSpells": [], "level": 0 };
+		}
+		var className = charRow.className[ 1 ];
+		var isFullCaster = variables.spellcasting.isFullCasterClass( className );
+		var isHalfCaster = variables.spellcasting.isHalfCasterClass( className );
+		if ( !isFullCaster && !isHalfCaster ) {
+			return { "pending": false, "availableSpells": [], "level": 0 };
+		}
+
+		var slotTable = variables.spellcasting.slotTable( isFullCaster );
+		var levelIndex = min( charRow.level[ 1 ], slotTable.len() );
+		var maxSlotLevel = 0;
+		if ( levelIndex > 0 ) {
+			var slotsAtLevel = slotTable[ levelIndex ];
+			for ( var spellLevel = 1; spellLevel <= slotsAtLevel.len(); spellLevel++ ) {
+				if ( slotsAtLevel[ spellLevel ] > 0 ) {
+					maxSlotLevel = spellLevel;
+				}
+			}
+		}
+		if ( maxSlotLevel == 0 ) {
+			return { "pending": false, "availableSpells": [], "level": 0 };
+		}
+
+		var knownNames = len( charRow.known_spells[ 1 ] ) ? listToArray( charRow.known_spells[ 1 ] ) : [];
+		var availableSpellsByLevel = variables.spellcasting.listCastableSpells( className, maxSlotLevel );
+		var spellNamesAtMaxLevel = [];
+		for ( var spell in availableSpellsByLevel ) {
+			spellNamesAtMaxLevel.append( spell.name );
+		}
+		var knownAtMaxLevel = 0;
+		for ( var name in knownNames ) {
+			if ( arrayFindNoCase( spellNamesAtMaxLevel, name ) > 0 ) {
+				knownAtMaxLevel += 1;
+			}
+		}
+		var pending = knownAtMaxLevel == 0;
+		var availableSpells = [];
+		if ( pending ) {
+			for ( var spell in availableSpellsByLevel ) {
+				if ( arrayFindNoCase( knownNames, spell.name ) == 0 ) {
+					availableSpells.append( spell );
+				}
+			}
+		}
+		return { "pending": pending, "availableSpells": availableSpells, "level": maxSlotLevel };
+	}
+
+	/**
+	 * Records a player-chosen new leveled spell against `characterId`, per
+	 * pendingSpellChoice() — the character sheet's "Learn a Spell" panel's
+	 * action. A no-op if the spell is already known.
+	 */
+	function chooseSpell( characterId, spellName ) {
+		_appendKnownSpellName( arguments.characterId, "known_spells", arguments.spellName );
+	}
+
+	/**
+	 * Returns pending Magic Initiate spell/cantrip picks for the character:
+	 * `{ pendingCantrips, availableCantrips, pendingSpell, availableSpells }`.
+	 * Uses the Wizard spell list as the source for Magic Initiate picks.
+	 */
+	function pendingMagicInitiateChoice( characterId ) {
+		var charRow = queryExecute(
+			"SELECT known_cantrips, known_spells, pending_magic_initiate_cantrips, pending_magic_initiate_spell
+			 FROM characters WHERE id = :characterId",
+			{ "characterId": arguments.characterId },
+			{ datasource: "gameserver" }
+		);
+		if ( charRow.recordCount == 0 ) {
+			return { "pendingCantrips": 0, "availableCantrips": [], "pendingSpell": false, "availableSpells": [] };
+		}
+
+		var pendingCantrips = charRow.pending_magic_initiate_cantrips[ 1 ];
+		var pendingSpellFlag = charRow.pending_magic_initiate_spell[ 1 ];
+		var knownCantrips    = len( charRow.known_cantrips[ 1 ] ) ? listToArray( charRow.known_cantrips[ 1 ] ) : [];
+		var knownSpells      = len( charRow.known_spells[ 1 ] ) ? listToArray( charRow.known_spells[ 1 ] ) : [];
+
+		var availableCantrips = [];
+		if ( pendingCantrips > 0 ) {
+			for ( var cantrip in variables.spellcasting.listCastableSpells( "Wizard", 0 ) ) {
+				if ( arrayFindNoCase( knownCantrips, cantrip.name ) == 0 ) {
+					availableCantrips.append( cantrip );
+				}
+			}
+		}
+
+		var availableSpells = [];
+		if ( pendingSpellFlag ) {
+			for ( var spell in variables.spellcasting.listCastableSpells( "Wizard", 1 ) ) {
+				if ( arrayFindNoCase( knownSpells, spell.name ) == 0 ) {
+					availableSpells.append( spell );
+				}
+			}
+		}
+
+		return {
+			"pendingCantrips":    pendingCantrips,
+			"availableCantrips":  availableCantrips,
+			"pendingSpell":       pendingSpellFlag,
+			"availableSpells":    availableSpells
+		};
+	}
+
+	/**
+	 * Records one Magic Initiate cantrip pick, decrementing the pending count.
+	 */
+	function chooseMagicInitiateCantrip( characterId, cantripName ) {
+		_appendKnownSpellName( arguments.characterId, "known_cantrips", arguments.cantripName );
+		queryExecute(
+			"UPDATE characters
+			 SET pending_magic_initiate_cantrips = GREATEST( 0, pending_magic_initiate_cantrips - 1 )
+			 WHERE id = :characterId",
+			{ "characterId": arguments.characterId },
+			{ datasource: "gameserver" }
+		);
+	}
+
+	/**
+	 * Records the Magic Initiate 1st-level spell pick, clearing the pending flag.
+	 */
+	function chooseMagicInitiateSpell( characterId, spellName ) {
+		_appendKnownSpellName( arguments.characterId, "known_spells", arguments.spellName );
+		queryExecute(
+			"UPDATE characters SET pending_magic_initiate_spell = 0 WHERE id = :characterId",
+			{ "characterId": arguments.characterId },
+			{ datasource: "gameserver" }
+		);
+	}
+
+	/**
+	 * Appends `spellName` to a character's comma-separated known_cantrips/
+	 * known_spells column, unless already present. Shared by
+	 * chooseCantrip()/chooseSpell(); `columnName` is always one of those two
+	 * literal, hardcoded column names, never user input.
+	 */
+	private function _appendKnownSpellName( characterId, columnName, spellName ) {
+		var current = queryExecute(
+			"SELECT #arguments.columnName# AS known_list FROM characters WHERE id = :characterId",
+			{ "characterId": arguments.characterId },
+			{ datasource: "gameserver" }
+		);
+		if ( current.recordCount == 0 ) {
+			return;
+		}
+		var known = len( current.known_list[ 1 ] ) ? listToArray( current.known_list[ 1 ] ) : [];
+		if ( arrayFindNoCase( known, arguments.spellName ) > 0 ) {
+			return;
+		}
+		known.append( arguments.spellName );
+		queryExecute(
+			"UPDATE characters SET #arguments.columnName# = :knownList WHERE id = :characterId",
+			{ "characterId": arguments.characterId, "knownList": arrayToList( known ) },
+			{ datasource: "gameserver" }
+		);
+	}
+
+}

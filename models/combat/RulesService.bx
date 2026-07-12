@@ -325,4 +325,71 @@ class singleton {
 		return { "roll": roll, "total": total, "success": ( total >= arguments.dc ), "isProficient": proficiencyBonus > 0 };
 	}
 
+	// Rage (Barbarian 1) uses per long rest, by level — see startRage(). Reset
+	// fully every encounter (no long-rest tracking across encounters exists
+	// in this app), same simplification as spell slots.
+	RAGE_USES_BY_LEVEL = [
+		2, 2, 3, 3, 3, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5, 6, 6, 6, 6, 6
+	];
+
+	/**
+	 * Extracts the fixed HP-per-level value from a class's hit_die text (e.g.
+	 * "D12 per Barbarian level"), per the "Fixed Hit Points by Class" table:
+	 * the average die roll rounded up, i.e. ceil(dieSize / 2) + 1.
+	 */
+	function fixedHitPointsPerLevel( hitDieText ) {
+		var dieSize = int( reReplace( arguments.hitDieText, "[^0-9]*(\d+).*", "\1" ) );
+		return int( ( dieSize + 1 ) / 2 ) + 1;
+	}
+
+	/**
+	 * Parses a weapon's "Range NN/NNN" property text (feet) into normal/long
+	 * range in 5-foot squares, e.g. "Thrown (Range 30/120)" -> {6, 24}.
+	 * Returns null if the weapon has no Range property.
+	 */
+	function parseWeaponRange( propertiesText ) {
+		var match = reFind( "Range\s+(\d+)\s*/\s*(\d+)", arguments.propertiesText, 1, true );
+		if ( !structKeyExists( match, "len" ) || match.len.len() < 3 || match.len[ 2 ] == 0 ) {
+			return javaCast( "null", 0 );
+		}
+		var normalFeet = int( mid( arguments.propertiesText, match.pos[ 2 ], match.len[ 2 ] ) );
+		var longFeet = int( mid( arguments.propertiesText, match.pos[ 3 ], match.len[ 3 ] ) );
+		return { "normal": int( normalFeet / 5 ), "long": int( longFeet / 5 ) };
+	}
+
+	/**
+	 * Rage (Barbarian 1) uses per long rest, from RAGE_USES_BY_LEVEL.
+	 */
+	function rageUsesForLevel( level ) {
+		return RAGE_USES_BY_LEVEL[ min( max( arguments.level, 1 ), RAGE_USES_BY_LEVEL.len() ) ];
+	}
+
+	/**
+	 * Derives `player.ragesRemaining` from the persisted `player.ragesUsed`
+	 * (like spentSpellSlots, the actual source of truth) and the level-based
+	 * max (rageUsesForLevel()) — 0 for a non-Barbarian. Called on load, on
+	 * level-up (a higher level can raise the max mid-encounter), and after
+	 * startRage()/shortRest()/longRest() change `ragesUsed`.
+	 */
+	function recomputeRagesRemaining( player ) {
+		if ( !structKeyExists( arguments.player, "features" ) || arrayFindNoCase( arguments.player.features, "Rage" ) == 0 ) {
+			arguments.player.ragesRemaining = 0;
+			return;
+		}
+		var used = structKeyExists( arguments.player, "ragesUsed" ) ? arguments.player.ragesUsed : 0;
+		arguments.player.ragesRemaining = max( 0, rageUsesForLevel( arguments.player.level ) - used );
+	}
+
+	/**
+	 * Known consumable item effects, keyed by items.name (see
+	 * armor_and_items_seed.sql) — separate from the items table itself since
+	 * only a handful of seeded items actually do anything when used; the
+	 * rest (Rations, Torch, Rope, Gemstone) are inert flavor/treasure.
+	 */
+	function consumableEffects() {
+		return {
+			"Potion of Healing": { "type": "heal", "diceCount": 2, "diceSides": 4, "flatBonus": 2 }
+		};
+	}
+
 }
