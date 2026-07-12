@@ -129,6 +129,23 @@ server.json               CommandBox server config (webroot, WebSocket wiring)
   need to log in again on the tunnel's URL even if you're already logged in
   on `localhost`.
 
+## Contributing
+
+All submissions must include corresponding test specs (`tests/specs/`)
+covering the change.
+
+Tests run via [TestBox](https://testbox.ortusbooks.com/)'s HTTP runner
+([`tests/runner.bxm`](tests/runner.bxm)), not a CommandBox CLI module. With
+the server running (`box server start`, prints the URL/port):
+
+- **Browser** — visit `/tests/runner.bxm` for TestBox's visual HTML report.
+- **CLI/CI** — `curl -s "http://127.0.0.1:PORT/tests/runner.bxm?reporter=json"`
+  for a JSON summary (`totalSpecs`, `totalPass`, `totalFail`, `totalError`).
+
+Useful query params: `reporter` (`simple` default, `json`, `text`, `dot`),
+`bundles` (restrict to one spec, e.g. `?bundles=CombatServiceSpec`),
+`labels` (restrict to labeled tests).
+
 ## Credits
 
 Dungeon/tile art from Kenney's [Tiny Dungeon](https://kenney.nl/assets/tiny-dungeon)
