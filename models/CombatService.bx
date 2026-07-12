@@ -1,23 +1,32 @@
 /**
- * Turn-based grid combat rules engine, per the D&D 5e SRD 5.2.1 core rules.
+ * Facade over the turn-based combat engine, which lives in focused services
+ * under models/combat/. Callers (WebSocket.bx, the api/*.bxm endpoints,
+ * CharacterService, and the spec suite) keep addressing this one class; every
+ * public method below is a delegator that forwards to the owning service with
+ * argumentCollection, so each service's own argument defaults stay
+ * authoritative. Routing map:
  *
- * Stateless with respect to WireBox (registered as a singleton, holds no
- * per-encounter data itself) — every method takes the encounter's mutable
- * `state` struct (or the specific combatant structs it needs) and mutates
- * them in place, the same way the CBWIRE component's own data properties
- * work. This keeps the service usable from any wire component without
- * fighting CBWIRE's reactive data-binding model.
+ *   DiceService           — dice notation parsing and rolling
+ *   RulesService          — ability/proficiency math, skills, species traits,
+ *                           rules-text tooltips, rage table, consumables data
+ *   GridService           — pathfinding (BFS/distance fields), line of sight,
+ *                           walkability, tile picking
+ *   MonsterLibrary        — stat-block parsing, rosters, spawn building, the
+ *                           slim client opponent view
+ *   SpellcastingService   — caster classes, spell slots, spells-table lookups
+ *   ProgressionService    — XP/level-ups, ASI, feats, styles, subclass/
+ *                           multiclass, level-up spell pickers
+ *   CharacterStateService — loadCharacter/saveCharacterState, rests
+ *   CombatActionsService  — attack/damage resolution, action economy,
+ *                           conditions, saves, in-combat casting, death saves
+ *   EnemyAIService        — enemy phase, aggro, legendary actions, the
+ *                           auto-battle brain, initiative, turn handoff
+ *
+ * Everything stays stateless: per-encounter data lives in the mutable `state`
+ * struct callers pass in, mutated in place.
  */
 class singleton {
 
-	/**
-	 * CombatService is being split into focused services under models/combat/
-	 * — this class is becoming a facade. Callers keep addressing it; each
-	 * extracted concern gets a delegator below that forwards with
-	 * argumentCollection, so the owning service's own argument defaults stay
-	 * authoritative and internal unscoped calls in not-yet-moved code still
-	 * resolve here.
-	 */
 	function init() {
 		variables.dice  = new models.combat.DiceService();
 		variables.rules = new models.combat.RulesService();
@@ -52,14 +61,7 @@ class singleton {
 	function resolveSkillProficiencies( species, background ) { return variables.rules.resolveSkillProficiencies( argumentCollection = arguments ); }
 	function parseClassSkillChoice( text ) { return variables.rules.parseClassSkillChoice( argumentCollection = arguments ); }
 	function rollSkillCheck( combatant, skill, dc ) { return variables.rules.rollSkillCheck( argumentCollection = arguments ); }
-	private function _abilityFullName( abbreviation ) { return variables.rules.abilityFullName( argumentCollection = arguments ); }
-	private function _resolveSpeciesMechanics( species ) { return variables.rules.resolveSpeciesMechanics( argumentCollection = arguments ); }
-	private function _skillProficienciesFromTraits( traitNames, background ) { return variables.rules.skillProficienciesFromTraits( argumentCollection = arguments ); }
-	private function _skillProficiencyBonus( combatant, skill ) { return variables.rules.skillProficiencyBonus( argumentCollection = arguments ); }
 	function consumableEffects() { return variables.rules.consumableEffects(); }
-	private function _fixedHitPointsPerLevel( hitDieText ) { return variables.rules.fixedHitPointsPerLevel( argumentCollection = arguments ); }
-	private function _parseWeaponRange( propertiesText ) { return variables.rules.parseWeaponRange( argumentCollection = arguments ); }
-	private function _recomputeRagesRemaining( player ) { return variables.rules.recomputeRagesRemaining( argumentCollection = arguments ); }
 
 	// ── Delegators: GridService ───────────────────────────────────────────────
 	// moveToward/stepAlongDistanceField keep the cantMove() condition guard
@@ -77,14 +79,6 @@ class singleton {
 	function randomOpenTilesNear( grid, center, radius, count, excludePositions ) { return variables.grid.randomOpenTilesNear( argumentCollection = arguments ); }
 	function chebyshev( a, b ) { return variables.grid.chebyshev( argumentCollection = arguments ); }
 	function hasLineOfSight( grid, from, to ) { return variables.grid.hasLineOfSight( argumentCollection = arguments ); }
-	private function _stateGrid( state ) { return variables.grid.stateGrid( argumentCollection = arguments ); }
-	private function _distanceField( grid, origin ) { return variables.grid.distanceField( argumentCollection = arguments ); }
-	private function _stepAlongDistanceField( grid, field, mover, target, maxSteps, occupiedPositions = [] ) {
-		if ( cantMove( arguments.mover ) ) {
-			return 0;
-		}
-		return variables.grid.stepAlongDistanceField( argumentCollection = arguments );
-	}
 
 	// ── Delegators: MonsterLibrary ────────────────────────────────────────────
 	function buildOpponentsForMap( map, level, takenPositions ) { return variables.monsters.buildOpponentsForMap( argumentCollection = arguments ); }
@@ -99,8 +93,6 @@ class singleton {
 	function isHalfCasterClass( className ) { return variables.spellcasting.isHalfCasterClass( argumentCollection = arguments ); }
 	function listCastableSpells( className, level ) { return variables.spellcasting.listCastableSpells( argumentCollection = arguments ); }
 	function lookupSpellByName( name ) { return variables.spellcasting.lookupSpellByName( argumentCollection = arguments ); }
-	private function _assignSpellcasting( player ) { return variables.spellcasting.assignSpellcasting( argumentCollection = arguments ); }
-	private function _recomputeSpellSlots( player ) { return variables.spellcasting.recomputeSpellSlots( argumentCollection = arguments ); }
 
 	// ── Delegators: ProgressionService ────────────────────────────────────────
 	function awardExperience( state, xp, player ) { return variables.progression.awardExperience( argumentCollection = arguments ); }
@@ -127,9 +119,6 @@ class singleton {
 	function pendingMagicInitiateChoice( characterId ) { return variables.progression.pendingMagicInitiateChoice( argumentCollection = arguments ); }
 	function chooseMagicInitiateCantrip( characterId, cantripName ) { return variables.progression.chooseMagicInitiateCantrip( argumentCollection = arguments ); }
 	function chooseMagicInitiateSpell( characterId, spellName ) { return variables.progression.chooseMagicInitiateSpell( argumentCollection = arguments ); }
-	private function _awardPartyExperience( state, xp ) { return variables.progression.awardPartyExperience( argumentCollection = arguments ); }
-	private function _incrementCharacterStat( characterId, column, amount = 1 ) { return variables.progression.incrementCharacterStat( argumentCollection = arguments ); }
-	private function _grantMonsterLoot( state, defender ) { return variables.progression.grantMonsterLoot( argumentCollection = arguments ); }
 
 	// ── Delegators: CharacterStateService ─────────────────────────────────────
 	function loadCharacter( characterId ) { return variables.characterState.loadCharacter( argumentCollection = arguments ); }
@@ -146,12 +135,6 @@ class singleton {
 	function startNewRound( state ) { return variables.actions.startNewRound( argumentCollection = arguments ); }
 	function attacksPerTurn( combatant ) { return variables.actions.attacksPerTurn( argumentCollection = arguments ); }
 	function checkOpportunityAttacks( state, mover, moverIsPlayer, startPosition ) { return variables.actions.checkOpportunityAttacks( argumentCollection = arguments ); }
-	private function _recordThreat( defender, attacker, amount ) { return variables.actions.recordThreat( argumentCollection = arguments ); }
-	private function _stateOpponents( state ) { return variables.actions.stateOpponents( argumentCollection = arguments ); }
-	private function _otherLivingPositions( state, mover, target ) { return variables.actions.otherLivingPositions( argumentCollection = arguments ); }
-	private function _allOpponentsDefeated( state ) { return variables.actions.allOpponentsDefeated( argumentCollection = arguments ); }
-	private function _nearestLivingOpponent( state ) { return variables.actions.nearestLivingOpponent( argumentCollection = arguments ); }
-	private function _retargetIfCurrentOpponentDefeated( state ) { return variables.actions.retargetIfCurrentOpponentDefeated( argumentCollection = arguments ); }
 	function hasCondition( combatant, name ) { return variables.actions.hasCondition( argumentCollection = arguments ); }
 	function addCondition( combatant, name, data = true ) { return variables.actions.addCondition( argumentCollection = arguments ); }
 	function removeCondition( combatant, name ) { return variables.actions.removeCondition( argumentCollection = arguments ); }
@@ -171,13 +154,8 @@ class singleton {
 	function attemptShove( state, attacker, defender ) { return variables.actions.attemptShove( argumentCollection = arguments ); }
 	function useBreathWeapon( state ) { return variables.actions.useBreathWeapon( argumentCollection = arguments ); }
 	function hasSpellResource( combatant, minimumLevel ) { return variables.actions.hasSpellResource( argumentCollection = arguments ); }
-	private function _checkConcentration( log, combatant, damageTaken ) { return variables.actions.checkConcentration( argumentCollection = arguments ); }
-	private function _isSpellTargetValid( state, attacker, defender, spell ) { return variables.actions.isSpellTargetValid( argumentCollection = arguments ); }
 	function castCantrip( state, name = "" ) { return variables.actions.castCantrip( argumentCollection = arguments ); }
 	function castLeveledSpell( state, name = "", healTarget = javaCast( "null", 0 ) ) { return variables.actions.castLeveledSpell( argumentCollection = arguments ); }
-	private function _applyDamageModifiers( defender, damage, damageType ) { return variables.actions.applyDamageModifiers( argumentCollection = arguments ); }
-	private function _checkDefenderDefeated( state, attacker, defender, defenderIsPlayer ) { return variables.actions.checkDefenderDefeated( argumentCollection = arguments ); }
-	private function _applyDeathSaveFailure( state, attacker, defender ) { return variables.actions.applyDeathSaveFailure( argumentCollection = arguments ); }
 	function rollDeathSave( state ) { return variables.actions.rollDeathSave( argumentCollection = arguments ); }
 	function rollInitiative( combatant ) { return variables.actions.rollInitiative( argumentCollection = arguments ); }
 
@@ -190,135 +168,6 @@ class singleton {
 	function startRage( state ) { return variables.actions.startRage( argumentCollection = arguments ); }
 	function endRage( state ) { return variables.actions.endRage( argumentCollection = arguments ); }
 	function useConsumableItem( state, itemName ) { return variables.actions.useConsumableItem( argumentCollection = arguments ); }
-	private function _castCantripFor( state, attacker, defender, defenderIsPlayer, cantrip ) { return variables.actions.castCantripFor( argumentCollection = arguments ); }
-	private function _castLeveledSpellFor( state, attacker, defender, defenderIsPlayer, spell ) { return variables.actions.castLeveledSpellFor( argumentCollection = arguments ); }
 	function playerAttack( state, weapon, disadvantage = false ) { return variables.actions.playerAttack( argumentCollection = arguments ); }
-
-	/**
-	 * The full ability name a skill's checks use (e.g. "Perception" ->
-	 * "Wisdom"), from SKILL_ABILITIES — for a tooltip on skill proficiency
-	 * chips, same idea as conditionDescription(). Empty string for an
-	 * unrecognized skill name.
-	 */
-
-	/**
-	 * The actual total bonus `combatant` rolls for a `skill` check right now
-	 * (ability modifier + Proficiency Bonus, the latter only if they're
-	 * proficient — see _skillProficiencyBonus()) — this is "the benefit" a
-	 * skill proficiency chip's tooltip should show, not just which ability
-	 * it uses.
-	 */
-
-	/**
-	 * The SRD rules text for a feat — same idea as conditionDescription(),
-	 * for a tooltip on the level-up screen's feat picker.
-	 */
-
-	/**
-	 * The SRD rules text for a class feature — same idea as featDescription(),
-	 * for a tooltip on a Features chip (character creation, character sheet,
-	 * and the combat screen's player stat card). A feature name can exist
-	 * against more than one class (e.g. "Ability Score Improvement" is
-	 * granted by every class); this just returns whichever row comes first,
-	 * since this app doesn't track which class granted a given chip in the
-	 * caller's plain name array.
-	 */
-
-	/**
-	 * Maps an ability abbreviation ("str") to its full SRD name ("Strength"),
-	 * matching the format `savingThrowProficiencies` is stored in.
-	 */
-
-	/**
-	 * Parses a "NdM" damage notation, e.g. "2d6" -> { count: 2, sides: 6 }.
-	 * Returns 0 dice for anything that isn't that exact shape (blank, or a
-	 * malformed value that shouldn't exist in well-formed data but has
-	 * turned up before in imported monster stat blocks — see the "Elk"/
-	 * "Killer Whale"/"Tiger" seed data bug fixed alongside this) — a weapon
-	 * with 0 dice just deals its flat damage bonus, same as a real SRD
-	 * flat-damage attack, rather than crashing combat outright.
-	 */
-
-	/**
-	 * Rolls `count` dice of `sides` and returns their sum.
-	 */
-
-	/**
-	 * Rolls `count` dice of `sides`, treating any face below `minFace` as
-	 * `minFace` instead (Great Weapon Fighting: "treat any 1 or 2 as a 3").
-	 */
-
-	/**
-	 * Proficiency Bonus for a given character level, per the Character
-	 * Advancement table: +2 at levels 1-4, +3 at 5-8, +4 at 9-12, +5 at
-	 * 13-16, +6 at 17-20.
-	 */
-
-	/**
-	 * Resolves a character's species name (which may be a subrace, e.g. "Hill
-	 * Dwarf") against the `species`/`species_traits` tables, merging in the
-	 * parent race's resistances and traits when the named species is a
-	 * subrace — a Hill Dwarf has both its own trait (Dwarven Toughness) and
-	 * every trait Dwarf grants. Returns { resistances: [], traitNames: [] };
-	 * both are empty for an unrecognized or blank species name (e.g. a
-	 * character created before species was DB-backed).
-	 */
-
-	/**
-	 * Public entry point for resolving a character's skill proficiencies by
-	 * species/background name alone (for callers, like CharacterService's
-	 * character sheet, that don't already have a _resolveSpeciesMechanics()
-	 * result on hand). loadCharacter() calls _skillProficienciesFromTraits()
-	 * directly instead, to reuse the speciesMechanics it already computed.
-	 */
-
-	/**
-	 * Parses a `classes.skill_proficiencies` SRD string (e.g. "Choose 2:
-	 * Acrobatics, Animal Handling, Athletics, ... or Survival", or Bard's
-	 * "Choose any 3 skills (see Playing the Game)") into
-	 * { count, options }, for the character creation wizard's skill picker.
-	 * `options` is every one of the SRD's 18 skills when the class allows
-	 * "any" skill rather than a specific list.
-	 */
-
-	/**
-	 * Resolves a character's skill proficiencies from their background's
-	 * fixed `skill_proficiencies` list (e.g. Acolyte: Insight, Religion) plus
-	 * any species traits in TRAIT_SKILL_GRANTS (e.g. Elf's Keen Senses ->
-	 * Perception). Doesn't cover a class's own skill choices (`classes.
-	 * skill_proficiencies` is an unparsed "choose 2 of ..." SRD string, and
-	 * character creation has no skill-picker step) — see WIP.md.
-	 *
-	 * @traitNames Species trait names, from _resolveSpeciesMechanics().traitNames.
-	 * @background characters.background.
-	 */
-
-	/**
-	 * The Proficiency Bonus to add to `combatant`'s check for `skill`, or 0
-	 * if they aren't proficient. Monsters carry no per-skill proficiency
-	 * data (only saving throw bonuses come from their stat block), so a
-	 * combatant with no `skillProficiencies` array is treated as proficient
-	 * in everything — the same always-proficient behavior attemptGrapple()/
-	 * attemptShove() already had for every combatant before skill
-	 * proficiencies existed, preserved here so monster contests don't get
-	 * silently nerfed for lack of data.
-	 */
-
-	/**
-	 * Rolls a generic skill check: d20 + ability modifier + Proficiency Bonus
-	 * (only if `combatant` is proficient in `skill` — see
-	 * _skillProficiencyBonus()), vs. `dc`. Mirrors rollSavingThrow()'s
-	 * shape; unlike saving throws, no species trait or condition in this
-	 * app currently grants Advantage/Disadvantage on a skill check
-	 * specifically, so there's no such hook here yet.
-	 *
-	 * @combatant The combatant making the check.
-	 * @skill One of the SRD skill names (see SKILL_ABILITIES) — e.g. "Perception".
-	 * @dc The Difficulty Class to meet or beat.
-	 */
-
-	/**
-	 * Standard D&D ability modifier: floor((score - 10) / 2).
-	 */
 
 }
