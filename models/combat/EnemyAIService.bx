@@ -1,0 +1,705 @@
+/**
+ * Encounter AI and round orchestration: the enemy phase (per-opponent
+ * turns, aggro/threat targeting, legendary actions), the auto-battle
+ * player brain, initiative, and the player-to-enemy turn handoff.
+ * Depends on Grid, CombatActions, and Dice.
+ */
+class singleton {
+
+	function init( grid, actions, dice ) {
+		variables.grid    = arguments.grid;
+		variables.actions = arguments.actions;
+		variables.dice    = arguments.dice;
+		return this;
+	}
+
+	// Movement with the condition guard the combat rules require — a
+	// Restrained/Stunned/etc. combatant has effectively 0 speed.
+	private function _guardedMoveToward( mover, target, maxSteps, grid = javaCast( "null", 0 ), occupiedPositions = [] ) {
+		if ( variables.actions.cantMove( arguments.mover ) ) {
+			return 0;
+		}
+		return variables.grid.moveToward( argumentCollection = arguments );
+	}
+
+	private function _guardedStepAlongDistanceField( grid, field, mover, target, maxSteps, occupiedPositions = [] ) {
+		if ( variables.actions.cantMove( arguments.mover ) ) {
+			return 0;
+		}
+		return variables.grid.stepAlongDistanceField( argumentCollection = arguments );
+	}
+
+	/**
+	 * Decides and performs the player's action for one turn: move toward the
+	 * opponent if not adjacent (preferring melee — better damage, no
+	 * Disadvantage), then either casts a spell (see _autoCastPlayerSpell())
+	 * or attacks with whatever's in range once movement settles. Does not
+	 * advance to the enemy's turn — callers do that separately once they're
+	 * done acting.
+	 *
+	 * @state The encounter's full mutable game state struct.
+	 */
+	function playerDecideAndAct( state ) {
+		var player = arguments.state.player;
+		if ( !structKeyExists( arguments.state, "attacksUsedThisTurn" ) ) {
+			arguments.state.attacksUsedThisTurn = 0;
+		}
+		var totalAttacks = variables.actions.attacksPerTurn( player );
+
+		while ( arguments.state.attacksUsedThisTurn < totalAttacks && !arguments.state.gameOver ) {
+			arguments.state.opponent = variables.actions.nearestLivingOpponent( arguments.state );
+			if ( isNull( arguments.state.opponent ) ) {
+				return;
+			}
+			var opponent = arguments.state.opponent;
+			var distance = variables.grid.chebyshev( player, opponent );
+
+			if ( distance > 1 ) {
+				var startPosition = { "x": player.position.x, "y": player.position.y };
+				var steps = _guardedMoveToward(
+					player, opponent, arguments.state.movementRemaining, variables.grid.stateGrid( arguments.state ),
+					variables.actions.otherLivingPositions( arguments.state, player, opponent )
+				);
+				if ( steps > 0 ) {
+					arguments.state.movementRemaining -= steps;
+					arguments.state.log.prepend( "#player.name# advances toward #opponent.name#." );
+					variables.actions.checkOpportunityAttacks( arguments.state, player, true, startPosition );
+					if ( arguments.state.gameOver ) {
+						return;
+					}
+				}
+				distance = variables.grid.chebyshev( player, opponent );
+			}
+
+			// A spell replaces the whole Attack action, not one swing of it —
+			// only worth considering on the turn's first action, before any
+			// Extra Attack swings have already committed to a weapon, and only
+			// when the player isn't already standing next to a foe with a melee
+			// weapon ready (adjacent + melee = weapon attack wins).
+			var hasMeleeWeapon = !isNull( variables.actions.equippedWeapon( player, "melee" ) );
+			var bloodied = player.hitPoints <= player.maxHitPoints / 2;
+			if ( arguments.state.attacksUsedThisTurn == 0 && ( distance > 1 || !hasMeleeWeapon || bloodied ) && _autoCastPlayerSpell( arguments.state, opponent ) ) {
+				return;
+			}
+
+			var choice = variables.actions.pickWeaponForDistance( player, distance, variables.grid.stateGrid( arguments.state ), opponent.position );
+			if ( isNull( choice ) ) {
+				arguments.state.log.prepend( "#player.name# can't reach #opponent.name# this turn." );
+				return;
+			}
+
+			arguments.state.attacksUsedThisTurn += 1;
+			arguments.state.actionUsed = true;
+			arguments.state.roundHadAction = true;
+			variables.actions.playerAttack( arguments.state, choice.weapon, choice.disadvantage );
+		}
+	}
+
+	/**
+	 * Auto-battle's spellcasting decision for the player — mirrors
+	 * `_runOneOpponentTurn()`'s own priority exactly, so a caster fights as
+	 * intelligently under auto-battle as an enemy spellcaster already does:
+	 * a known heal spell while bloodied (50% HP or less), else a known
+	 * damage/save spell with a slot available and a clear shot at
+	 * `opponent`, else a known cantrip with a clear shot. Returns true (and
+	 * has already cast) the first time one of these applies — auto-battle
+	 * doesn't hold slots in reserve for a tougher fight later, same as the
+	 * enemy AI. False if nothing applied, so the caller falls back to a
+	 * mundane weapon attack.
+	 */
+	private function _autoCastPlayerSpell( state, opponent ) {
+		var player = arguments.state.player;
+		if ( structKeyExists( player, "knownLeveledSpells" ) && player.hitPoints <= player.maxHitPoints / 2 ) {
+			for ( var spell in player.knownLeveledSpells ) {
+				if ( spell.type == "heal" && variables.actions.hasSpellResource( player, spell.level ) ) {
+					variables.actions.castLeveledSpell( arguments.state, spell.name );
+					if ( arguments.state.actionUsed ) {
+						return true;
+					}
+				}
+			}
+		}
+
+		if ( structKeyExists( player, "knownLeveledSpells" ) ) {
+			for ( var spell in player.knownLeveledSpells ) {
+				if (
+					( spell.type == "attack" || spell.type == "save" || spell.type == "damage" ) && variables.actions.hasSpellResource( player, spell.level ) &&
+					variables.actions.isSpellTargetValid( arguments.state, player, arguments.opponent, spell )
+				) {
+					variables.actions.castLeveledSpell( arguments.state, spell.name );
+					if ( arguments.state.actionUsed ) {
+						return true;
+					}
+				}
+			}
+		}
+
+		if ( structKeyExists( player, "knownCantrips" ) ) {
+			for ( var cantrip in player.knownCantrips ) {
+				if ( variables.actions.isSpellTargetValid( arguments.state, player, arguments.opponent, cantrip ) ) {
+					variables.actions.castCantrip( arguments.state, cantrip.name );
+					if ( arguments.state.actionUsed ) {
+						return true;
+					}
+				}
+			}
+		}
+
+		return false;
+	}
+
+	/**
+	 * Hands control to the enemy, runs any legendary actions (see
+	 * _runLegendaryActions()), then resets for the next player turn.
+	 *
+	 * @state The encounter's full mutable game state struct.
+	 */
+	function endPlayerTurn( state ) {
+		arguments.state.currentTurn = "enemy";
+		runEnemyTurn( arguments.state );
+
+		if ( !arguments.state.gameOver ) {
+			_runLegendaryActions( arguments.state );
+		}
+
+		if ( !arguments.state.gameOver ) {
+			arguments.state.round += 1;
+			arguments.state.currentTurn = "player";
+			variables.actions.startNewRound( arguments.state );
+		}
+	}
+
+	/**
+	 * Picks which party member `opponent` should pursue/attack this turn:
+	 * among whichever members it currently perceives (line of sight, or
+	 * unconditionally if the encounter has no grid — same "aware from the
+	 * start" fallback the pre-aggro version of this AI used), whichever has
+	 * dealt it the most cumulative damage so far (see variables.actions.recordThreat()),
+	 * ties broken by proximity. If nothing is currently visible but the
+	 * opponent was already aware of the party, it keeps pursuing its
+	 * highest-threat *known* target rather than forgetting the party the
+	 * instant sight breaks — same "stays alerted" simplification the
+	 * pre-aggro version used, just generalized from "the player" to "the
+	 * party." Returns null (opponent does nothing this turn) if it has
+	 * never perceived anyone.
+	 *
+	 * A downed (0 HP, dying) party member is still a valid candidate —
+	 * they can be finished off, same as the pre-party single-player
+	 * version of this AI always allowed (see _runOneOpponentTurn()'s own
+	 * isDying handling). Excluding them here instead would leave every
+	 * opponent with no target at all once the only member they'd perceived
+	 * went down, making them do nothing for the rest of the fight instead
+	 * of finishing the job or reassessing once someone else comes into view.
+	 *
+	 * @state The encounter's full mutable game state struct.
+	 * @opponent The opponent choosing a target.
+	 */
+	private function _selectAggroTarget( state, opponent ) {
+		var grid = variables.grid.stateGrid( arguments.state );
+		if ( !structKeyExists( arguments.opponent, "aware" ) ) {
+			arguments.opponent.aware = false;
+		}
+
+		var living = arguments.state.players;
+		if ( living.len() == 0 ) {
+			return javaCast( "null", 0 );
+		}
+
+		var visible = [];
+		for ( var member in living ) {
+			if ( isNull( grid ) || variables.grid.hasLineOfSight( grid, arguments.opponent.position, member.position ) ) {
+				visible.append( member );
+			}
+		}
+
+		var target = javaCast( "null", 0 );
+		if ( visible.len() > 0 ) {
+			if ( !arguments.opponent.aware ) {
+				arguments.opponent.aware = true;
+				arguments.state.log.prepend( "#arguments.opponent.name# notices you!" );
+			}
+			target = _highestThreatTarget( arguments.opponent, visible );
+		} else if ( arguments.opponent.aware ) {
+			target = _highestThreatTarget( arguments.opponent, living );
+		}
+
+		// Stashed only for opponentsForClient()'s "who is this thing focused
+		// on" indicator — purely cosmetic, no combat logic reads it back.
+		arguments.opponent.aggroTarget = isNull( target ) ? "" : target.name;
+		return target;
+	}
+
+	/**
+	 * Among `candidates` (living party members), the one that's dealt
+	 * `opponent` the most cumulative damage — ties broken by proximity,
+	 * then by array order (favors whichever member appears first in
+	 * `state.players`), so behavior stays deterministic when no damage has
+	 * been dealt yet (e.g. the opponent's very first turn after noticing
+	 * the party).
+	 */
+	private function _highestThreatTarget( opponent, candidates ) {
+		var threat = structKeyExists( arguments.opponent, "threat" ) ? arguments.opponent.threat : {};
+		var best = javaCast( "null", 0 );
+		var bestThreat = -1;
+		var bestDistance = 999999;
+		for ( var member in arguments.candidates ) {
+			var key = "p#member.characterId#";
+			var memberThreat = structKeyExists( threat, key ) ? threat[ key ] : 0;
+			var distance = variables.grid.chebyshev( arguments.opponent, member );
+			if ( memberThreat > bestThreat || ( memberThreat == bestThreat && distance < bestDistance ) ) {
+				best = member;
+				bestThreat = memberThreat;
+				bestDistance = distance;
+			}
+		}
+		return best;
+	}
+
+	/**
+	 * Runs every living opponent's turn in sequence (via _runOneOpponentTurn()),
+	 * stopping early if its target goes down mid-sequence. Each opponent
+	 * picks its own target via _selectAggroTarget() (perception, then
+	 * threat) — distance fields for movement are built once per distinct
+	 * target position and reused across every opponent pursuing that same
+	 * target, rather than once per opponent, since in practice most/all
+	 * opponents converge on whichever party member is currently drawing
+	 * the most aggro.
+	 *
+	 * @state The encounter's full mutable game state struct.
+	 */
+	function runEnemyTurn( state ) {
+		// Per-mob pathfinding (a full-map BFS each) took tens of seconds a
+		// round with a whole map's worth of mobs converging, so distance
+		// fields are built once per distinct target position and shared by
+		// every opponent pursuing that same target this turn, rather than
+		// once per opponent.
+		var grid = variables.grid.stateGrid( arguments.state );
+		var fieldsByTarget = {};
+
+		for ( var opponent in variables.actions.stateOpponents( arguments.state ) ) {
+			if ( opponent.hitPoints <= 0 ) {
+				continue;
+			}
+			var target = _selectAggroTarget( arguments.state, opponent );
+			if ( isNull( target ) ) {
+				continue;
+			}
+			var distanceField = javaCast( "null", 0 );
+			if ( !isNull( grid ) ) {
+				var fieldKey = "#target.position.x#,#target.position.y#";
+				if ( !structKeyExists( fieldsByTarget, fieldKey ) ) {
+					fieldsByTarget[ fieldKey ] = variables.grid.distanceField( grid, target.position );
+				}
+				distanceField = fieldsByTarget[ fieldKey ];
+			}
+			_runOneOpponentTurn( arguments.state, opponent, target, distanceField );
+			if ( arguments.state.gameOver ) {
+				return;
+			}
+		}
+	}
+
+	/**
+	 * Simple enemy AI for one opponent's turn: closes the distance greedily
+	 * (1 square per step, up to its Speed). If the opponent knows any spells
+	 * (the same knownCantrip/knownLeveledSpell fields loadCharacter() assigns
+	 * the player — nothing currently grants these to a DB-loaded monster; a
+	 * Spellcasting-trait monster's ranged attack is instead just flavored as
+	 * a "cast" in the log, see variables.actions.resolveAttack()'s isSpell check, so this
+	 * branch is still latent capability for now), it prefers self-healing
+	 * when bloodied, then a damage spell with a clear line to the player,
+	 * before falling back to a special/breath attack or melee/ranged
+	 * weapons; if it still can't reach melee this turn, it falls back to a
+	 * ranged weapon if in range.
+	 *
+	 * Does nothing at all — no movement, no regeneration, no combat checks —
+	 * for an opponent that's never perceived anyone (see
+	 * _selectAggroTarget() — runEnemyTurn() skips calling this function
+	 * entirely in that case). Movement/reach log lines are only written
+	 * while `target` is within sight, so a map's worth of alerted mobs
+	 * converging from far away doesn't flood the log every round.
+	 *
+	 * @state The encounter's full mutable game state struct.
+	 * @opponent The specific opponent whose turn this is.
+	 * @target The party member this opponent picked via _selectAggroTarget().
+	 * @distanceField Optional shared distance field toward `target`'s
+	 *  position (see variables.grid.distanceField()), built once per enemy turn by
+	 *  runEnemyTurn() — movement follows it downhill instead of running a
+	 *  per-mob BFS.
+	 */
+	private function _runOneOpponentTurn( state, opponent, target, distanceField = javaCast( "null", 0 ) ) {
+		var player = arguments.target;
+		var grid = variables.grid.stateGrid( arguments.state );
+
+		// Regeneration (e.g. a Troll/Oni): heals at the start of every turn it's
+		// alive for, per its parsed trait — simplified from the real rules by
+		// ignoring any "doesn't function after Acid/Fire damage" carve-out some
+		// stat blocks add, same "flatten the exception" approach already used
+		// elsewhere in this file (e.g. cover, spell AoE shapes).
+		if ( structKeyExists( arguments.opponent, "regenerationPerTurn" ) && arguments.opponent.regenerationPerTurn > 0 ) {
+			var healed = min( arguments.opponent.regenerationPerTurn, arguments.opponent.maxHitPoints - arguments.opponent.hitPoints );
+			if ( healed > 0 ) {
+				arguments.opponent.hitPoints += healed;
+				arguments.state.log.prepend( "#arguments.opponent.name# regenerates #healed# Hit Points (#arguments.opponent.hitPoints#/#arguments.opponent.maxHitPoints# HP)." );
+			}
+		}
+
+		// Incapacitated (or Paralyzed/Petrified/Stunned/Unconscious, which
+		// all include it): can't take actions or Reactions — no movement,
+		// no attack, no spell, this turn.
+		if ( variables.actions.isIncapacitated( arguments.opponent ) ) {
+			arguments.state.log.prepend( "#arguments.opponent.name# is incapacitated and can't act." );
+			return;
+		}
+
+		// A player at 0 HP — dying, or merely stabilized — is Unconscious and
+		// helpless: an aware opponent just finishes them off rather than
+		// rolling a normal attack. This always lands, and counts as 2 failed
+		// death saves if delivered within 5 feet (RAW: melee attacks — and any
+		// attack at all, per the simplified 2024 Incapacitated rule — auto-crit
+		// an unconscious target at that range). Landing a further hit on a
+		// stabilized player un-stabilizes them, per the "Stabilizing a
+		// Creature" rules (only a fresh source of damage restarts the dying).
+		if ( player.hitPoints <= 0 ) {
+			variables.actions.applyDeathSaveFailure( arguments.state, arguments.opponent, player );
+			return;
+		}
+
+		// Weapon Mastery — Slow: see variables.actions.startNewRound()'s note on timing.
+		var opponentSpeedPenalty = structKeyExists( arguments.opponent, "speedPenalty" ) ? arguments.opponent.speedPenalty : 0;
+		var maxSteps = int( max( 0, arguments.opponent.speed - opponentSpeedPenalty ) / 5 );
+		var steps = 0;
+		if ( !isNull( grid ) && !isNull( arguments.distanceField ) ) {
+			steps = _guardedStepAlongDistanceField(
+				grid, arguments.distanceField, arguments.opponent, player, maxSteps,
+				variables.actions.otherLivingPositions( arguments.state, arguments.opponent, player )
+			);
+		} else {
+			steps = _guardedMoveToward(
+				arguments.opponent, player, maxSteps, grid,
+				variables.actions.otherLivingPositions( arguments.state, arguments.opponent, player )
+			);
+		}
+
+		var inSight = isNull( grid ) || variables.grid.hasLineOfSight( grid, arguments.opponent.position, player.position );
+		if ( steps > 0 && inSight ) {
+			arguments.state.log.prepend( "#arguments.opponent.name# closes in." );
+		}
+
+		if (
+			structKeyExists( arguments.opponent, "knownLeveledSpell" ) && !isNull( arguments.opponent.knownLeveledSpell ) &&
+			arguments.opponent.knownLeveledSpell.type == "heal" && arguments.opponent.hitPoints <= arguments.opponent.maxHitPoints / 2 &&
+			variables.actions.hasSpellResource( arguments.opponent, 1 )
+		) {
+			// Self-heal: the opponent is its own target here, not its aggro
+			// target — a monster casting Cure Wounds heals itself, it doesn't
+			// heal the party member it's fighting.
+			variables.actions.castLeveledSpellFor( arguments.state, arguments.opponent, arguments.opponent, false, arguments.opponent.knownLeveledSpell );
+			return;
+		}
+
+		if (
+			structKeyExists( arguments.opponent, "knownLeveledSpell" ) && !isNull( arguments.opponent.knownLeveledSpell ) &&
+			arguments.opponent.knownLeveledSpell.type == "damage" && variables.actions.hasSpellResource( arguments.opponent, 1 ) &&
+			variables.actions.isSpellTargetValid( arguments.state, arguments.opponent, player, arguments.opponent.knownLeveledSpell )
+		) {
+			variables.actions.castLeveledSpellFor( arguments.state, arguments.opponent, player, true, arguments.opponent.knownLeveledSpell );
+			return;
+		}
+		if (
+			structKeyExists( arguments.opponent, "knownCantrip" ) && !isNull( arguments.opponent.knownCantrip ) &&
+			variables.actions.isSpellTargetValid( arguments.state, arguments.opponent, player, arguments.opponent.knownCantrip )
+		) {
+			variables.actions.castCantripFor( arguments.state, arguments.opponent, player, true, arguments.opponent.knownCantrip );
+			return;
+		}
+
+		// A once-per-encounter save-based special attack (e.g. a dragon
+		// wyrmling's breath weapon — see _parseStructuredSpecialAttack())
+		// takes priority over a mundane weapon attack, same as a real dragon
+		// opening with its breath. Simplified from "Recharge 5-6" to "once
+		// per encounter" — same simplification this app's own Dragonborn
+		// Breath Weapon already uses — rather than tracking a per-turn
+		// recharge die.
+		if (
+			structKeyExists( arguments.opponent, "specialAttack" ) && !isNull( arguments.opponent.specialAttack ) &&
+			!( structKeyExists( arguments.opponent, "usedSpecialAttack" ) && arguments.opponent.usedSpecialAttack ) &&
+			variables.grid.chebyshev( arguments.opponent, player ) <= arguments.opponent.specialAttack.rangeSquares &&
+			( isNull( grid ) || variables.grid.hasLineOfSight( grid, arguments.opponent.position, player.position ) )
+		) {
+			_useMonsterSpecialAttack( arguments.state, arguments.opponent, player );
+			return;
+		}
+
+		var attackCount = variables.actions.attacksPerTurn( arguments.opponent );
+		for ( var attackNum = 1; attackNum <= attackCount; attackNum++ ) {
+			if ( arguments.state.gameOver || player.hitPoints <= 0 ) {
+				break;
+			}
+			var choice = variables.actions.pickWeaponForDistance( arguments.opponent, variables.grid.chebyshev( arguments.opponent, player ), grid, player.position );
+			if ( isNull( choice ) ) {
+				if ( attackNum == 1 && inSight ) {
+					arguments.state.log.prepend( "#arguments.opponent.name# can't reach you this turn." );
+				}
+				break;
+			}
+			var packAdvantage = _hasPackTacticsAdvantage( arguments.state, arguments.opponent, player );
+			variables.actions.resolveAttack( arguments.state.log, arguments.opponent, player, choice.weapon, choice.disadvantage, packAdvantage, false, variables.actions.coverBonus( arguments.state, arguments.opponent, player ), arguments.state );
+			arguments.state.roundHadAction = true;
+			variables.actions.checkDefenderDefeated( arguments.state, arguments.opponent, player, true );
+		}
+	}
+
+	/**
+	 * Pack Tactics (`opponent.hasPackTactics` — see _buildMonsterStruct()):
+	 * Advantage on an attack roll against `target` if another living ally is
+	 * within 5 ft. (1 square) of that target.
+	 */
+	private function _hasPackTacticsAdvantage( state, opponent, target ) {
+		if ( !structKeyExists( arguments.opponent, "hasPackTactics" ) || !arguments.opponent.hasPackTactics ) {
+			return false;
+		}
+		for ( var ally in arguments.state.opponents ) {
+			if ( ally.mobIndex == arguments.opponent.mobIndex || ally.hitPoints <= 0 ) {
+				continue;
+			}
+			if ( variables.grid.chebyshev( ally, arguments.target ) <= 1 ) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Fires a monster's parsed save-based special attack (see
+	 * _parseStructuredSpecialAttack()) at the player once per encounter —
+	 * half damage on a success, full on a failure, same shape as the
+	 * player's own (hardcoded) Dragonborn Breath Weapon.
+	 */
+	private function _useMonsterSpecialAttack( state, opponent, player ) {
+		var special = arguments.opponent.specialAttack;
+		arguments.opponent.usedSpecialAttack = true;
+		arguments.state.actionUsed = true;
+		arguments.state.roundHadAction = true;
+
+		var saveResult = variables.actions.rollSavingThrow( arguments.player, special.saveAbility, special.saveDC );
+		var damage = variables.dice.rollSum( special.diceCount, special.diceSides ) + special.damageBonus;
+		if ( saveResult.success ) {
+			damage = int( damage / 2 );
+		}
+		damage = variables.actions.applyDamageModifiers( arguments.player, damage, special.damageType );
+
+		arguments.player.hitPoints = max( 0, arguments.player.hitPoints - damage );
+		variables.actions.checkConcentration( arguments.state.log, arguments.player, damage );
+		arguments.state.log.prepend(
+			"#arguments.opponent.name# uses #special.name#! #arguments.player.name# rolls a DC #special.saveDC# #special.saveAbilityLabel# save: #saveResult.total# — " &
+			( saveResult.success ? "succeeds, takes half damage. " : "fails! " ) &
+			"#damage# #special.damageType# damage (#arguments.player.hitPoints#/#arguments.player.maxHitPoints# HP)."
+		);
+		variables.actions.checkDefenderDefeated( arguments.state, arguments.opponent, arguments.player, true );
+	}
+
+	/**
+	 * Runs each living opponent's legendary action for this round, if it
+	 * has any (see _buildMonsterStruct()'s `legendaryActions`) — called
+	 * once from endPlayerTurn(), right after the enemies' normal turns and
+	 * before the round advances. Real 5e lets a legendary creature act
+	 * after *each other creature's* turn (up to 3 uses/round); simplified
+	 * here to exactly one legendary action per round, since this game has
+	 * a single player and batches every monster's normal turn together
+	 * with no interleaving — "after each other creature's turn" only ever
+	 * has one trigger point per round anyway.
+	 */
+	private function _runLegendaryActions( state ) {
+		for ( var opponent in variables.actions.stateOpponents( arguments.state ) ) {
+			if ( arguments.state.gameOver || opponent.hitPoints <= 0 ) {
+				continue;
+			}
+			// Dormant mobs don't act — same awareness gate as _runOneOpponentTurn().
+			if ( structKeyExists( opponent, "aware" ) && !opponent.aware ) {
+				continue;
+			}
+			if ( !structKeyExists( opponent, "legendaryActions" ) || opponent.legendaryActions.len() == 0 ) {
+				continue;
+			}
+			// Same perception-then-threat target as its normal turn — a
+			// legendary action never targets a downed party member (these
+			// are all offensive/self-heal effects, not finishing blows).
+			var target = _selectAggroTarget( arguments.state, opponent );
+			if ( isNull( target ) || target.hitPoints <= 0 ) {
+				continue;
+			}
+			_runLegendaryAction( arguments.state, opponent, target );
+		}
+	}
+
+	/**
+	 * Executes one monster's legendary action for the round — scans its
+	 * parsed legendary_actions_json entries (see _buildMonsterStruct()) in
+	 * priority order and resolves the first one it can actually act on
+	 * mechanically: a save-based damage effect (e.g. a dragon's "Cloud of
+	 * Insects"), a self-heal, or reusing one of its own weapon attacks (the
+	 * common "makes one Rend attack" pattern, matched by name against its
+	 * inventory — see _findLegendaryReuseWeapon()). Falls back to logging
+	 * the array's first entry as flavor text with no mechanical effect if
+	 * nothing usable is in range — most of the remaining entries describe
+	 * a spell cast (e.g. "casts Fear") this engine has no mechanic for,
+	 * same simplification already used for monster Spellcasting elsewhere
+	 * in this file.
+	 */
+	private function _runLegendaryAction( state, opponent, player ) {
+		var grid = variables.grid.stateGrid( arguments.state );
+		var distance = variables.grid.chebyshev( arguments.opponent, arguments.player );
+		var hasLos = isNull( grid ) || variables.grid.hasLineOfSight( grid, arguments.opponent.position, arguments.player.position );
+
+		for ( var entry in arguments.opponent.legendaryActions ) {
+			if ( len( entry.damageDice ) && entry.saveDC > 0 && distance <= entry.rangeSquares && hasLos ) {
+				_useLegendarySaveAttack( arguments.state, arguments.opponent, arguments.player, entry );
+				return;
+			}
+		}
+		for ( var entry in arguments.opponent.legendaryActions ) {
+			if ( entry.healAmount > 0 ) {
+				_useLegendaryHeal( arguments.state, arguments.opponent, entry );
+				return;
+			}
+		}
+		for ( var entry in arguments.opponent.legendaryActions ) {
+			var reused = _findLegendaryReuseWeapon( arguments.opponent, entry );
+			if ( isNull( reused ) ) {
+				continue;
+			}
+			var withinRange = ( reused.category == "melee" ) ? ( distance <= 1 ) : ( distance <= reused.longRange );
+			if ( withinRange && hasLos ) {
+				// Logged (via prepend) after resolveAttack's own hit/miss line, so
+				// this announcement ends up as the newest entry, reading above the
+				// attack-roll detail it announces — same order _useLegendarySaveAttack()
+				// and _useLegendaryHeal() get for free from their single combined message.
+				variables.actions.resolveAttack(
+					arguments.state.log, arguments.opponent, arguments.player, reused, false, false, false,
+					variables.actions.coverBonus( arguments.state, arguments.opponent, arguments.player ), arguments.state
+				);
+				arguments.state.log.prepend( "#arguments.opponent.name# takes a legendary action: #entry.name#!" );
+				variables.actions.checkDefenderDefeated( arguments.state, arguments.opponent, arguments.player, true );
+				return;
+			}
+		}
+
+		var flavor = arguments.opponent.legendaryActions[ 1 ];
+		arguments.state.log.prepend( "#arguments.opponent.name# takes a legendary action: #flavor.name#." );
+	}
+
+	/**
+	 * A monster's own save-based legendary attack (e.g. a dragon's "Cloud
+	 * of Insects") — same math as _useMonsterSpecialAttack(), just against
+	 * an arbitrary legendary_actions_json entry instead of the monster's
+	 * one precomputed `specialAttack`.
+	 */
+	private function _useLegendarySaveAttack( state, opponent, player, entry ) {
+		var dice = variables.dice.parseDice( arguments.entry.damageDice );
+		var saveResult = variables.actions.rollSavingThrow( arguments.player, arguments.entry.saveAbility, arguments.entry.saveDC );
+		var damage = variables.dice.rollSum( dice.count, dice.sides ) + arguments.entry.damageBonus;
+		if ( saveResult.success ) {
+			damage = int( damage / 2 );
+		}
+		damage = variables.actions.applyDamageModifiers( arguments.player, damage, arguments.entry.damageType );
+
+		arguments.player.hitPoints = max( 0, arguments.player.hitPoints - damage );
+		variables.actions.checkConcentration( arguments.state.log, arguments.player, damage );
+		arguments.state.log.prepend(
+			"#arguments.opponent.name# takes a legendary action: #arguments.entry.name#! #arguments.player.name# rolls a DC #arguments.entry.saveDC# #arguments.entry.saveAbilityLabel# save: #saveResult.total# — " &
+			( saveResult.success ? "succeeds, takes half damage. " : "fails! " ) &
+			"#damage# #arguments.entry.damageType# damage (#arguments.player.hitPoints#/#arguments.player.maxHitPoints# HP)."
+		);
+		variables.actions.checkDefenderDefeated( arguments.state, arguments.opponent, arguments.player, true );
+	}
+
+	/**
+	 * A monster's own self-heal legendary action (e.g. Aboleth's "Psychic
+	 * Drain") — flat heal capped at max HP, same shape as the Regeneration
+	 * trait (_structuredRegenerationAmount()) but spent as a deliberate
+	 * legendary action rather than an automatic per-turn tick.
+	 */
+	private function _useLegendaryHeal( state, opponent, entry ) {
+		var healed = min( arguments.entry.healAmount, arguments.opponent.maxHitPoints - arguments.opponent.hitPoints );
+		arguments.opponent.hitPoints += healed;
+		arguments.state.log.prepend(
+			"#arguments.opponent.name# takes a legendary action: #arguments.entry.name#! Regains #healed# Hit Points (#arguments.opponent.hitPoints#/#arguments.opponent.maxHitPoints# HP)."
+		);
+	}
+
+	/**
+	 * Finds the inventory weapon a "makes one X attack"-style legendary
+	 * action entry is referring to — the common pattern (e.g. "The dragon
+	 * makes one Rend attack.") where the legendary action has no damage
+	 * stats of its own and instead reuses one of the monster's own
+	 * actions_json-derived attacks. Matched by a case-insensitive substring
+	 * search for the weapon's name within the entry's `desc` text. Returns
+	 * null if no inventory item's name appears in the description.
+	 */
+	private function _findLegendaryReuseWeapon( opponent, entry ) {
+		for ( var item in arguments.opponent.inventory ) {
+			if ( findNoCase( item.name, arguments.entry.desc ) > 0 ) {
+				return item;
+			}
+		}
+		return javaCast( "null", 0 );
+	}
+
+	/**
+	 * Rolls Initiative for both combatants (d20 + Dexterity modifier, plus
+	 * Proficiency Bonus for a character with the Alert feat) and sets
+	 * `state.currentTurn` to whoever acts first (ties favor the player
+	 * character). If the opponent wins, immediately runs their first turn.
+	 *
+	 * @state The encounter's full mutable game state struct.
+	 */
+	function rollForInitiative( state ) {
+		var opponents = variables.actions.stateOpponents( arguments.state );
+
+		// "Fought" is counted per encounter, not per kill — every opponent in
+		// this fight's roster, win or lose, the moment combat actually starts —
+		// and every living party member takes credit, not just whoever's active.
+		var bestPlayerRoll = "";
+		var fastestPlayerName = "";
+		for ( var member in arguments.state.players ) {
+			variables.progression.incrementCharacterStat( member.characterId, "monsters_fought", opponents.len() );
+			member.monstersFought = ( structKeyExists( member, "monstersFought" ) ? member.monstersFought : 0 ) + opponents.len();
+			var r = variables.actions.rollInitiative( member );
+			if ( !isNumeric( bestPlayerRoll ) || r > bestPlayerRoll ) {
+				bestPlayerRoll = r;
+				fastestPlayerName = member.name;
+			}
+		}
+
+		var bestOpponentRoll = "";
+		var fastestOpponentName = "";
+		for ( var o in opponents ) {
+			var r = variables.actions.rollInitiative( o );
+			if ( !isNumeric( bestOpponentRoll ) || r > bestOpponentRoll ) {
+				bestOpponentRoll = r;
+				fastestOpponentName = o.name;
+			}
+		}
+		var playerFirst = ( bestPlayerRoll >= bestOpponentRoll );
+		var playerLabel = ( arguments.state.players.len() > 1 ) ? "the party (#fastestPlayerName# leads at #bestPlayerRoll#)" : "#fastestPlayerName# rolls #bestPlayerRoll#";
+		var opponentLabel = ( opponents.len() > 1 ) ? "the enemies (#fastestOpponentName# leads at #bestOpponentRoll#)" : "#fastestOpponentName# rolls #bestOpponentRoll#";
+		var winnerLabel = playerFirst ? ( arguments.state.players.len() > 1 ? "The party" : fastestPlayerName ) : ( opponents.len() > 1 ? "The enemies" : fastestOpponentName );
+
+		arguments.state.log.prepend(
+			"Initiative: #playerLabel#, #opponentLabel#. #winnerLabel# goes first!"
+		);
+
+		if ( playerFirst ) {
+			arguments.state.currentTurn = "player";
+			return;
+		}
+
+		arguments.state.currentTurn = "enemy";
+		runEnemyTurn( arguments.state );
+		if ( !arguments.state.gameOver ) {
+			arguments.state.currentTurn = "player";
+		}
+	}
+
+}
