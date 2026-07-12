@@ -1,0 +1,470 @@
+/**
+ * Spellcasting machinery shared by combat casting, level-up, and
+ * character load: caster-class tables, spell-slot computation (including
+ * multiclass caster levels), and spell lookups from the spells table.
+ * Stateless.
+ */
+class singleton {
+
+	// Full-caster Spell Slots by level (index = level, value = slots per spell
+	// level 1-9). Warlock uses Pact Magic, mechanically simplified here to the
+	// same table (Warlocks actually have fewer, higher-level slots that
+	// recharge on a Short Rest — not modeled, since this app has no rest UI).
+	SPELL_SLOTS_FULL_CASTER = [
+		[ 2 ], [ 3 ], [ 4, 2 ], [ 4, 3 ], [ 4, 3, 2 ], [ 4, 3, 3 ], [ 4, 3, 3, 1 ], [ 4, 3, 3, 2 ],
+		[ 4, 3, 3, 3, 1 ], [ 4, 3, 3, 3, 2 ], [ 4, 3, 3, 3, 2, 1 ], [ 4, 3, 3, 3, 2, 1 ],
+		[ 4, 3, 3, 3, 2, 1, 1 ], [ 4, 3, 3, 3, 2, 1, 1 ], [ 4, 3, 3, 3, 2, 1, 1, 1 ], [ 4, 3, 3, 3, 2, 1, 1, 1 ],
+		[ 4, 3, 3, 3, 2, 1, 1, 1, 1 ], [ 4, 3, 3, 3, 3, 1, 1, 1, 1 ], [ 4, 3, 3, 3, 3, 2, 1, 1, 1 ], [ 4, 3, 3, 3, 3, 2, 2, 1, 1 ]
+	];
+	// Half-caster (Paladin, Ranger) Spell Slots by level: no slots at level 1,
+	// first slot at level 2, per the "Spell Slots by Level" progression.
+	SPELL_SLOTS_HALF_CASTER = [
+		[], [ 2 ], [ 3 ], [ 3 ], [ 4, 2 ], [ 4, 2 ], [ 4, 3 ], [ 4, 3 ],
+		[ 4, 3, 2 ], [ 4, 3, 2 ], [ 4, 3, 3 ], [ 4, 3, 3 ],
+		[ 4, 3, 3, 1 ], [ 4, 3, 3, 1 ], [ 4, 3, 3, 2 ], [ 4, 3, 3, 2 ],
+		[ 4, 3, 3, 3, 1 ], [ 4, 3, 3, 3, 1 ], [ 4, 3, 3, 3, 2 ], [ 4, 3, 3, 3, 2 ]
+	];
+
+	FULL_CASTER_CLASSES = [ "Bard", "Cleric", "Druid", "Sorcerer", "Warlock", "Wizard" ];
+	HALF_CASTER_CLASSES = [ "Paladin", "Ranger" ];
+
+	SPELLCASTING_ABILITY_BY_CLASS = {
+		"Bard": "cha", "Cleric": "wis", "Druid": "wis", "Sorcerer": "cha", "Warlock": "cha", "Wizard": "int",
+		"Paladin": "cha", "Ranger": "wis"
+	};
+
+	// Each spellcasting class's default cantrip is now looked up from the real
+	// spells table (via _lookupClassSpell(), level 0), same as the 1st-level
+	// spell — the SRD import originally had a regex bug that silently
+	// dropped every level-0 spell, since cantrips are subtitled differently
+	// ("Evocation Cantrip (...)") than leveled spells ("Level 3 Evocation
+	// (...)"); fixed in import_srd.py and backfilled via seeds/cantrips_seed.sql.
+	// Several classes have more than one usable attack/save cantrip in the
+	// data (Wizard alone has Chill Touch, Fire Bolt, Poison Spray, Ray of
+	// Frost, and Shocking Grasp) — this picks each class's most iconic one
+	// when it's available, purely so the game keeps its familiar flavor,
+	// not because the alternatives are wrong.
+	ICONIC_CANTRIP_BY_CLASS = {
+		"Wizard": "Fire Bolt", "Sorcerer": "Fire Bolt", "Warlock": "Eldritch Blast",
+		"Druid": "Produce Flame", "Cleric": "Sacred Flame", "Bard": "Vicious Mockery"
+	};
+
+	// Classes whose 1st-level spell should favor a heal over a damage spell,
+	// when _lookupClassSpell() finds both available — mirrors real-world
+	// party-role expectations (a Cleric would rather have Cure Wounds ready
+	// than Guiding Bolt as their one prepared leveled spell), not a rule from
+	// the SRD itself.
+	HEAL_PREFERRING_CLASSES = [ "Bard", "Cleric", "Druid", "Paladin", "Ranger" ];
+
+	// A cone/cube/line AoE centered on the caster (Burning Hands, Thunderwave,
+	// etc.) shows up in the spells table as Range "Self" — that's the origin
+	// point for the shape, not "must be adjacent". This app doesn't model
+	// spell shapes/areas at all, so as a stand-in, "Self"-range damage/save
+	// spells get treated as reaching this many squares (15 ft, the smallest
+	// common cone/cube size in the SRD) instead of 0.
+	SELF_RANGE_SPELL_SQUARES = 3;
+
+	/**
+	 * Assigns `player`'s spellcasting fields — spellcasting ability, known
+	 * cantrips/leveled spells (arrays — see `player.knownCantrips`/
+	 * `knownLeveledSpells`), and starting spell slots by level — from its
+	 * class (via ICONIC_CANTRIP_BY_CLASS, _lookupClassSpell(), and the slot
+	 * tables) plus the Magic Initiate feat, if any. Spell slots are computed
+	 * fresh each time a character is loaded, then reduced by whatever's
+	 * already been spent this rest cycle (`player.spentSpellSlots`, restored
+	 * by loadCharacter() from the persisted column, cleared by longRest()).
+	 *
+	 * If the player has chosen cantrips/spells (via character creation or
+	 * chooseCantrip()/chooseSpell() at level-up — stored on `player.
+	 * knownCantripNames`/`knownSpellNames` by loadCharacter(), from the
+	 * `characters.known_cantrips`/`known_spells` columns), those exact
+	 * spells are used instead of the auto-pick — falling back to the old
+	 * iconic/heal-preferring single auto-pick (as this character's only
+	 * known cantrip/spell) only for a full caster with nothing chosen yet
+	 * (character creation always offers a full caster a Spells step, so an
+	 * empty list there only means "created before that step existed") or a
+	 * non-caster with Magic Initiate. A half-caster (Paladin, Ranger) never
+	 * gets a creation-time pick — auto-picking for them here would violate
+	 * the "never auto-assign a player choice" rule, so they're left with an
+	 * empty list until pendingSpellChoice()/chooseSpell() gives them one
+	 * once their first spell slot actually unlocks (level 2).
+	 */
+	function assignSpellcasting( player ) {
+		var className = arguments.player.class;
+		var isFullCaster = isFullCasterClass( className );
+		var isHalfCaster = arrayFindNoCase( HALF_CASTER_CLASSES, className ) > 0;
+
+		// Multiclassing: a character can be a caster via ANY of their
+		// classes — spellcasting ability comes from whichever caster class
+		// has the higher level (ties favor the earlier-taken one). Real SRD
+		// spells still use their own class's ability; this app keeps a
+		// single spellcastingAbility value per character (see WIP.md's
+		// multiclassing section) rather than tracking it per known spell.
+		if ( structKeyExists( arguments.player, "classes" ) && arguments.player.classes.len() > 1 ) {
+			var bestCasterClass = javaCast( "null", 0 );
+			for ( var classEntry in arguments.player.classes ) {
+				var entryIsCaster = isFullCasterClass( classEntry.className ) || arrayFindNoCase( HALF_CASTER_CLASSES, classEntry.className ) > 0;
+				if ( entryIsCaster && ( isNull( bestCasterClass ) || classEntry.level > bestCasterClass.level ) ) {
+					bestCasterClass = classEntry;
+				}
+			}
+			isFullCaster = !isNull( bestCasterClass ) && isFullCasterClass( bestCasterClass.className );
+			isHalfCaster = !isNull( bestCasterClass ) && arrayFindNoCase( HALF_CASTER_CLASSES, bestCasterClass.className ) > 0;
+			className = isNull( bestCasterClass ) ? className : bestCasterClass.className;
+		}
+
+		arguments.player.isSpellcaster = isFullCaster || isHalfCaster || arguments.player.hasMagicInitiate;
+		arguments.player.spellcastingAbility = SPELLCASTING_ABILITY_BY_CLASS.keyExists( className )
+			? SPELLCASTING_ABILITY_BY_CLASS[ className ]
+			: "";
+		if ( !len( arguments.player.spellcastingAbility ) && arguments.player.hasMagicInitiate ) {
+			// Magic Initiate doesn't track which ability was chosen; use whichever
+			// of Intelligence, Wisdom, or Charisma is highest.
+			var mods = arguments.player.modifiers;
+			arguments.player.spellcastingAbility = ( mods.int >= mods.wis && mods.int >= mods.cha ) ? "int" : ( mods.wis >= mods.cha ? "wis" : "cha" );
+		}
+
+		var chosenCantripNames = structKeyExists( arguments.player, "knownCantripNames" ) ? arguments.player.knownCantripNames : [];
+		arguments.player.knownCantrips = [];
+		for ( var cantripName in chosenCantripNames ) {
+			var dbCantrip = lookupSpellByName( cantripName );
+			if ( !isNull( dbCantrip ) ) {
+				arguments.player.knownCantrips.append( dbCantrip );
+			}
+		}
+		if ( !arguments.player.knownCantrips.len() ) {
+			// The auto-pick fallback below only applies to a full caster (whose
+			// character-creation Spells step always makes a choice, so an empty
+			// list here only ever means "a character predating that step") or a
+			// non-caster with Magic Initiate. A half-caster (Paladin, Ranger)
+			// never gets a creation-time pick at all — falling back here would
+			// silently auto-assign their very first spell/cantrip, violating
+			// the "never auto-assign a player choice" rule. They rely entirely
+			// on pendingCantripChoice()/pendingSpellChoice() instead, which
+			// only start reporting anything once they actually reach a level
+			// that grants one — Paladin/Ranger never get cantrips at all, so
+			// pendingCantripChoice() correctly never applies to them either.
+			var preferredCantrip = ICONIC_CANTRIP_BY_CLASS.keyExists( className ) ? ICONIC_CANTRIP_BY_CLASS[ className ] : "";
+			var autoCantrip = isFullCaster ? _lookupClassSpell( className, 0, false, preferredCantrip ) : javaCast( "null", 0 );
+			if ( !isNull( autoCantrip ) ) {
+				arguments.player.knownCantrips.append( autoCantrip );
+			} else if ( arguments.player.hasMagicInitiate ) {
+				// Fire Bolt: 120 ft.
+				arguments.player.knownCantrips.append( { "type": "attack", "name": "Fire Bolt", "level": 0, "concentration": false, "damageType": "Fire", "rangeSquares": 24 } );
+			}
+		}
+
+		var chosenSpellNames = structKeyExists( arguments.player, "knownSpellNames" ) ? arguments.player.knownSpellNames : [];
+		arguments.player.knownLeveledSpells = [];
+		for ( var spellName in chosenSpellNames ) {
+			var dbSpell = lookupSpellByName( spellName );
+			if ( !isNull( dbSpell ) ) {
+				arguments.player.knownLeveledSpells.append( dbSpell );
+			}
+		}
+		if ( !arguments.player.knownLeveledSpells.len() ) {
+			// Same reasoning as the cantrip fallback above: only a full caster
+			// (always offered a creation-time pick) or Magic Initiate gets an
+			// auto-pick here. A half-caster with nothing chosen yet is left
+			// with an empty list — pendingSpellChoice() picks it up as soon as
+			// their first spell slot (level 2) unlocks, and stays pending until
+			// they actually choose one via the character sheet.
+			var preferHeal = arrayFindNoCase( HEAL_PREFERRING_CLASSES, className ) > 0;
+			var autoSpell = isFullCaster ? _lookupClassSpell( className, 1, preferHeal ) : javaCast( "null", 0 );
+			if ( !isNull( autoSpell ) ) {
+				arguments.player.knownLeveledSpells.append( autoSpell );
+			} else if ( arguments.player.hasMagicInitiate ) {
+				// Magic Missile: 120 ft.
+				arguments.player.knownLeveledSpells.append( { "type": "damage", "name": "Magic Missile", "level": 1, "concentration": false, "rangeSquares": 24 } );
+			}
+		}
+
+		recomputeSpellSlots( arguments.player );
+		// Magic Initiate's bonus 1st-level spell is a separate resource, not a
+		// slot — usable even by a class with no slots at all. It recovers on a
+		// Long Rest only (see longRest()); loadCharacter() sets its persisted
+		// used/unused state, so this function leaves it alone rather than
+		// resetting it on every load.
+	}
+
+	/**
+	 * Combined "Multiclass Spellcaster" caster level across every class in
+	 * `player.classes`, per the Multiclassing rules: a full-caster class
+	 * contributes its whole level, a half-caster (Paladin, Ranger)
+	 * contributes floor(level / 2), anything else contributes nothing.
+	 * Only meaningful once a character has more than one class — see the
+	 * caller in _recomputeSpellSlots(). Public (like hasSpellResource())
+	 * purely so this easy-to-get-wrong arithmetic (fractional caster levels
+	 * from half-casters, deliberately NOT matching a solo half-caster's own
+	 * table at some levels — see _recomputeSpellSlots()'s note) has a direct
+	 * unit test.
+	 */
+	function multiclassCasterLevel( player ) {
+		var total = 0;
+		for ( var classEntry in arguments.player.classes ) {
+			if ( isFullCasterClass( classEntry.className ) ) {
+				total += classEntry.level;
+			} else if ( arrayFindNoCase( HALF_CASTER_CLASSES, classEntry.className ) > 0 ) {
+				total += int( classEntry.level / 2 );
+			}
+		}
+		return total;
+	}
+
+	/**
+	 * (Re)computes `player.spellSlots` from the full/half-caster slot tables
+	 * at their current level, then subtracts whatever's already been spent
+	 * this rest cycle (`player.spentSpellSlots`). Factored out of
+	 * _assignSpellcasting() so _levelUp() can also call it — a level-up
+	 * happening mid-encounter (a Paladin reaching level 2 by killing the
+	 * monster in front of them, say) needs its new/increased slot count to
+	 * take effect immediately, not just the next time the character is
+	 * loaded fresh into a new encounter.
+	 */
+	function recomputeSpellSlots( player ) {
+		var slotTable = [];
+		var levelIndex = 0;
+		// Multiclassing: the combined "Multiclass Spellcaster" slot table is
+		// mechanically identical to the full-caster progression, indexed by
+		// an effective caster level (see multiclassCasterLevel()) instead
+		// of a single class's own level. A single-class character (still
+		// the overwhelming default) keeps using its own class's table
+		// directly and unchanged — the combined formula is a deliberately
+		// worse fit than a half-caster's own table at some levels (a real
+		// RAW quirk of multiclassing, not a bug), so it must only apply once
+		// there's actually more than one class to combine.
+		if ( structKeyExists( arguments.player, "classes" ) && arguments.player.classes.len() > 1 ) {
+			slotTable = SPELL_SLOTS_FULL_CASTER;
+			levelIndex = min( multiclassCasterLevel( arguments.player ), slotTable.len() );
+		} else {
+			var className = arguments.player.class;
+			var isFullCaster = isFullCasterClass( className );
+			var isHalfCaster = arrayFindNoCase( HALF_CASTER_CLASSES, className ) > 0;
+			slotTable = isFullCaster ? SPELL_SLOTS_FULL_CASTER : ( isHalfCaster ? SPELL_SLOTS_HALF_CASTER : [] );
+			levelIndex = min( arguments.player.level, slotTable.len() );
+		}
+		arguments.player.spellSlots = {};
+		if ( levelIndex > 0 ) {
+			var slotsAtLevel = slotTable[ levelIndex ];
+			for ( var spellLevel = 1; spellLevel <= slotsAtLevel.len(); spellLevel++ ) {
+				arguments.player.spellSlots[ spellLevel ] = slotsAtLevel[ spellLevel ];
+			}
+		}
+		// Subtract any slots already spent this encounter/rest cycle.
+		if ( structKeyExists( arguments.player, "spentSpellSlots" ) ) {
+			for ( var spentLvl in arguments.player.spentSpellSlots ) {
+				if ( structKeyExists( arguments.player.spellSlots, spentLvl ) ) {
+					arguments.player.spellSlots[ spentLvl ] = max( 0, arguments.player.spellSlots[ spentLvl ] - arguments.player.spentSpellSlots[ spentLvl ] );
+				}
+			}
+		}
+	}
+
+	/**
+	 * Looks up one castable spell of `level` for `className` from the
+	 * gameserver.spells table's structured mechanics columns (added by
+	 * migrations/002_spell_mechanics.sql and populated by
+	 * resources/database/extract_spell_mechanics.py) — a real attack-roll,
+	 * saving-throw, or healing spell instead of this app's old fixed-per-class
+	 * Magic Missile/Cure Wounds stand-ins. Prefers a `heal` spell when
+	 * `preferHeal` is true and one's available for the class, otherwise an
+	 * `attack`/`save` damage spell; falls back to whichever effect type IS
+	 * available if the preferred one isn't. Skips any spell whose dice don't
+	 * parse as plain "NdM" (e.g. Disintegrate's "10d6 + 40") — not a concern
+	 * at level 1 today, but a safety net if this is ever asked for higher
+	 * levels. Returns null if the class has no non-utility spell at that level.
+	 *
+	 * @className The class to find a spell for (must match a name in the spells table's `classes` column).
+	 * @level The spell's level (0 for cantrips, 1-9 otherwise).
+	 * @preferHeal Whether to prefer a heal-type spell over an attack/save one, when both are available.
+	 * @preferredName If a spell by this exact name matches, it wins over any other candidate — lets a class keep its iconic pick (Fire Bolt, Eldritch Blast, Sacred Flame) when the class has more than one option, without hardcoding the spell's own mechanics.
+	 */
+	private function _lookupClassSpell( className, level, preferHeal, preferredName = "" ) {
+		var preferredTypes = arguments.preferHeal ? "'heal'" : "'attack','save'";
+		var rows = queryExecute(
+			"SELECT name, level, duration, effect_type, attack_type, save_ability, save_effect, damage_dice, damage_type, heal_dice, `range`
+			 FROM spells
+			 WHERE FIND_IN_SET( :className, REPLACE( classes, ', ', ',' ) ) > 0
+			   AND level = :level
+			   AND effect_type IN ( #preferredTypes# )
+			   AND ( damage_dice IS NULL OR damage_dice REGEXP '^[0-9]+d[0-9]+$' )
+			   AND ( heal_dice IS NULL OR heal_dice REGEXP '^[0-9]+d[0-9]+$' )
+			 ORDER BY ( name = :preferredName ) DESC, name
+			 LIMIT 1",
+			{ "className": arguments.className, "level": arguments.level, "preferredName": arguments.preferredName },
+			{ datasource: "gameserver" }
+		);
+
+		if ( rows.recordCount == 0 ) {
+			// Try the other effect type before giving up — e.g. Warlock only
+			// has a damage spell at level 1, no heal, even though Warlock
+			// isn't in HEAL_PREFERRING_CLASSES anyway; this also covers a
+			// heal-preferring class whose only level-1 option is a damage spell.
+			var fallbackTypes = arguments.preferHeal ? "'attack','save'" : "'heal'";
+			rows = queryExecute(
+				"SELECT name, level, duration, effect_type, attack_type, save_ability, save_effect, damage_dice, damage_type, heal_dice, `range`
+				 FROM spells
+				 WHERE FIND_IN_SET( :className, REPLACE( classes, ', ', ',' ) ) > 0
+				   AND level = :level
+				   AND effect_type IN ( #fallbackTypes# )
+				   AND ( damage_dice IS NULL OR damage_dice REGEXP '^[0-9]+d[0-9]+$' )
+				   AND ( heal_dice IS NULL OR heal_dice REGEXP '^[0-9]+d[0-9]+$' )
+				 ORDER BY ( name = :preferredName ) DESC, name
+				 LIMIT 1",
+				{ "className": arguments.className, "level": arguments.level, "preferredName": arguments.preferredName },
+				{ datasource: "gameserver" }
+			);
+		}
+
+		if ( rows.recordCount == 0 ) {
+			return javaCast( "null", 0 );
+		}
+		return _spellStructFromRow( rows, 1 );
+	}
+
+	/**
+	 * Converts one row of a `spells` query (with the standard SELECT list
+	 * used throughout this file — name, level, duration, effect_type,
+	 * attack_type, save_ability, save_effect, damage_dice, damage_type,
+	 * heal_dice, `range`) into the discriminated struct shape castCantrip()/
+	 * castLeveledSpell()/_runOneOpponentTurn() all expect. Shared by
+	 * _lookupClassSpell() (picks one row), listCastableSpells() (every
+	 * matching row), and lookupSpellByName() (one row by exact name).
+	 *
+	 * `level` lets castLeveledSpell() spend the correct-level slot
+	 * instead of always assuming 1st; `concentration` (derived from the
+	 * `duration` text, e.g. "Concentration, up to 1 minute" — there's no
+	 * dedicated boolean column) drives the single-concentration-spell rule
+	 * in _startConcentrating().
+	 */
+	private function _spellStructFromRow( rows, i ) {
+		var level = arguments.rows.level[ arguments.i ];
+		var concentration = findNoCase( "Concentration", arguments.rows.duration[ arguments.i ] ) > 0;
+		if ( arguments.rows.effect_type[ arguments.i ] == "heal" ) {
+			var healDice = parseDice( arguments.rows.heal_dice[ arguments.i ] );
+			return { "type": "heal", "name": arguments.rows.name[ arguments.i ], "level": level, "concentration": concentration, "diceCount": healDice.count, "diceSides": healDice.sides };
+		}
+
+		var damageDice = parseDice( arguments.rows.damage_dice[ arguments.i ] );
+		var rangeSquares = _parseSpellRangeSquares( arguments.rows.range[ arguments.i ] );
+		if ( arguments.rows.effect_type[ arguments.i ] == "attack" ) {
+			return {
+				"type": "attack", "name": arguments.rows.name[ arguments.i ], "level": level, "concentration": concentration, "damageType": arguments.rows.damage_type[ arguments.i ],
+				"diceCount": damageDice.count, "diceSides": damageDice.sides, "rangeSquares": rangeSquares
+			};
+		}
+		return {
+			"type": "save", "name": arguments.rows.name[ arguments.i ], "level": level, "concentration": concentration, "damageType": arguments.rows.damage_type[ arguments.i ],
+			"saveAbility": arguments.rows.save_ability[ arguments.i ], "saveEffect": arguments.rows.save_effect[ arguments.i ],
+			"diceCount": damageDice.count, "diceSides": damageDice.sides, "rangeSquares": rangeSquares
+		};
+	}
+
+	/**
+	 * Lists every castable (non-utility, plain-"NdM"-dice) spell `className`
+	 * has available at `level` (0 for cantrips, 1 for 1st-level spells) — the
+	 * options a player picks from at character creation (see
+	 * app/wires/characterCreation.bx). Each entry is the same struct shape
+	 * `player.knownCantrip`/`knownLeveledSpell` use in combat.
+	 *
+	 * @className The class to list spells for (must match a name in the spells table's `classes` column).
+	 * @level The spell's level (0 for cantrips, 1-9 otherwise).
+	 */
+	function listCastableSpells( className, level ) {
+		var rows = queryExecute(
+			"SELECT name, level, duration, effect_type, attack_type, save_ability, save_effect, damage_dice, damage_type, heal_dice, `range`
+			 FROM spells
+			 WHERE FIND_IN_SET( :className, REPLACE( classes, ', ', ',' ) ) > 0
+			   AND level = :level
+			   AND effect_type IN ( 'attack', 'save', 'heal' )
+			   AND ( damage_dice IS NULL OR damage_dice REGEXP '^[0-9]+d[0-9]+$' )
+			   AND ( heal_dice IS NULL OR heal_dice REGEXP '^[0-9]+d[0-9]+$' )
+			 ORDER BY name",
+			{ "className": arguments.className, "level": arguments.level },
+			{ datasource: "gameserver" }
+		);
+		var results = [];
+		for ( var i = 1; i <= rows.recordCount; i++ ) {
+			results.append( _spellStructFromRow( rows, i ) );
+		}
+		return results;
+	}
+
+	/**
+	 * Looks up one specific castable spell by its exact name — used to
+	 * resolve one of a character's stored `known_cantrips`/`known_spells` choices (see
+	 * loadCharacter()) into full casting mechanics. Returns null if there's
+	 * no such castable spell (e.g. the name doesn't exist, or is a
+	 * utility-only spell this app can't mechanize).
+	 *
+	 * @name The spell's exact name, as stored in the `spells` table.
+	 */
+	function lookupSpellByName( name ) {
+		var rows = queryExecute(
+			"SELECT name, level, duration, effect_type, attack_type, save_ability, save_effect, damage_dice, damage_type, heal_dice, `range`
+			 FROM spells
+			 WHERE name = :name
+			   AND effect_type IN ( 'attack', 'save', 'heal' )
+			   AND ( damage_dice IS NULL OR damage_dice REGEXP '^[0-9]+d[0-9]+$' )
+			   AND ( heal_dice IS NULL OR heal_dice REGEXP '^[0-9]+d[0-9]+$' )
+			 LIMIT 1",
+			{ "name": arguments.name },
+			{ datasource: "gameserver" }
+		);
+		if ( rows.recordCount == 0 ) {
+			return javaCast( "null", 0 );
+		}
+		return _spellStructFromRow( rows, 1 );
+	}
+
+	/**
+	 * Whether `className` is one of the six full-caster classes (Bard,
+	 * Cleric, Druid, Sorcerer, Warlock, Wizard) — the only classes with any
+	 * spells to choose at 1st level (half-casters get their first spell
+	 * slot at 2nd, per SPELL_SLOTS_HALF_CASTER). Public so the
+	 * character-creation wire can decide whether to show the Spells step.
+	 */
+	function isFullCasterClass( className ) {
+		return arrayFindNoCase( FULL_CASTER_CLASSES, arguments.className ) > 0;
+	}
+
+	/**
+	 * Converts a spells-table Range string ("120 feet", "Touch", "Self", ...)
+	 * into a distance in 5-foot squares, for range-checking a cast against
+	 * chebyshev(attacker, defender). "Touch" is 1 square (melee range);
+	 * "Self" is SELF_RANGE_SPELL_SQUARES (see above); anything unparseable
+	 * falls back to 24 squares (120 ft, the most common attack-cantrip range)
+	 * rather than blocking a spell this app already decided was castable.
+	 */
+	private function _parseSpellRangeSquares( rangeText ) {
+		if ( arguments.rangeText == "Touch" ) {
+			return 1;
+		}
+		if ( arguments.rangeText == "Self" ) {
+			return SELF_RANGE_SPELL_SQUARES;
+		}
+		var feetMatch = reFind( "(\d+)\s*feet", arguments.rangeText, 1, true );
+		if ( structKeyExists( feetMatch, "len" ) && feetMatch.len.len() >= 2 && feetMatch.len[ 2 ] > 0 ) {
+			var feet = int( mid( arguments.rangeText, feetMatch.pos[ 2 ], feetMatch.len[ 2 ] ) );
+			return int( feet / 5 );
+		}
+		return 24;
+	}
+
+	/**
+	 * Whether `className` is a half-caster (Paladin, Ranger) — first spell
+	 * slot at level 2 per SPELL_SLOTS_HALF_CASTER.
+	 */
+	function isHalfCasterClass( className ) {
+		return arrayFindNoCase( HALF_CASTER_CLASSES, arguments.className ) > 0;
+	}
+
+	/**
+	 * The slot progression table for a caster type, for callers (e.g.
+	 * pendingSpellChoice()) that inspect max unlocked slot level directly.
+	 */
+	function slotTable( isFullCaster ) {
+		return arguments.isFullCaster ? SPELL_SLOTS_FULL_CASTER : SPELL_SLOTS_HALF_CASTER;
+	}
+
+}
