@@ -1,0 +1,328 @@
+/**
+ * Core rulebook lookups shared by every other combat service: ability
+ * modifiers, proficiency progression, the SRD skill list and skill-check
+ * math, species trait mechanics, and rules-text tooltips. Stateless —
+ * constant tables only.
+ */
+class singleton {
+
+	// The SRD's eighteen skills, each tied to the ability its checks use.
+	SKILL_ABILITIES = {
+		"Athletics": "str",
+		"Acrobatics": "dex", "Sleight of Hand": "dex", "Stealth": "dex",
+		"Arcana": "int", "History": "int", "Investigation": "int", "Nature": "int", "Religion": "int",
+		"Animal Handling": "wis", "Insight": "wis", "Medicine": "wis", "Perception": "wis", "Survival": "wis",
+		"Deception": "cha", "Intimidation": "cha", "Performance": "cha", "Persuasion": "cha"
+	};
+
+	// Species traits (see species_traits.name) that grant a fixed skill
+	// proficiency, for skillProficienciesFromTraits().
+	TRAIT_SKILL_GRANTS = {
+		"Keen Senses": [ "Perception" ],
+		"Menacing": [ "Intimidation" ]
+	};
+
+	// Species traits that grant "N skills of your choice" rather than a
+	// fixed skill — e.g. Half-Elf's Skill Versatility. The player picks
+	// which via characterCreation.bx's Origin step (see
+	// speciesSkillChoiceCount()); the choice is stored the same way a
+	// class's chosen skills are (characters.chosen_skill_proficiencies).
+	TRAIT_SKILL_CHOICE_COUNTS = { "Skill Versatility": 2 };
+
+	// In-game clock: a combat round is about 6 seconds per the SRD. Rest
+	// durations are measured against this — see the rest functions.
+	SECONDS_PER_ROUND = 6;
+
+	function secondsPerRound() {
+		return SECONDS_PER_ROUND;
+	}
+
+	/**
+	 * Standard D&D ability modifier: floor((score - 10) / 2).
+	 */
+	function abilityModifier( score ) {
+		return int( ( arguments.score - 10 ) / 2 );
+	}
+
+	/**
+	 * Proficiency Bonus for a given character level, per the Character
+	 * Advancement table: +2 at levels 1-4, +3 at 5-8, +4 at 9-12, +5 at
+	 * 13-16, +6 at 17-20.
+	 */
+	function proficiencyBonusForLevel( level ) {
+		return 2 + int( ( arguments.level - 1 ) / 4 );
+	}
+
+	/**
+	 * Maps an ability abbreviation ("str") to its full SRD name ("Strength"),
+	 * matching the format `savingThrowProficiencies` is stored in.
+	 */
+	function abilityFullName( abbreviation ) {
+		var names = { "str": "Strength", "dex": "Dexterity", "con": "Constitution", "int": "Intelligence", "wis": "Wisdom", "cha": "Charisma" };
+		return names[ arguments.abbreviation ];
+	}
+
+	/**
+	 * Total "skills of your choice" a species' traits grant (e.g. 2 for
+	 * Half-Elf's Skill Versatility) — see TRAIT_SKILL_CHOICE_COUNTS.
+	 */
+	function speciesSkillChoiceCount( traitNames ) {
+		var count = 0;
+		for ( var traitName in TRAIT_SKILL_CHOICE_COUNTS ) {
+			if ( arrayFindNoCase( arguments.traitNames, traitName ) > 0 ) {
+				count += TRAIT_SKILL_CHOICE_COUNTS[ traitName ];
+			}
+		}
+		return count;
+	}
+
+	/**
+	 * Every SRD skill name, alphabetically — for a skill-choice picker (e.g.
+	 * Skill Versatility, the Skilled feat) to loop over.
+	 */
+	function allSkillNames() {
+		var names = structKeyArray( SKILL_ABILITIES );
+		arraySort( names, "textnocase" );
+		return names;
+	}
+
+	/**
+	 * The full name of the ability a skill's checks use ("Perception" ->
+	 * "Wisdom"), from SKILL_ABILITIES — for a tooltip on skill proficiency
+	 * chips.
+	 */
+	function skillAbility( name ) {
+		return structKeyExists( SKILL_ABILITIES, arguments.name ) ? abilityFullName( SKILL_ABILITIES[ arguments.name ] ) : "";
+	}
+
+	/**
+	 * The actual total bonus `combatant` rolls for a `skill` check right now
+	 * (ability modifier + Proficiency Bonus, the latter only if they're
+	 * proficient — see skillProficiencyBonus()) — this is "the benefit" a
+	 * skill proficiency chip's tooltip should show, not just which ability
+	 * it uses.
+	 */
+	function skillCheckBonus( combatant, skill ) {
+		var ability = SKILL_ABILITIES[ arguments.skill ];
+		var abilityMod = structKeyExists( arguments.combatant, "modifiers" )
+			? arguments.combatant.modifiers[ ability ]
+			: abilityModifier( arguments.combatant.abilityScores[ ability ] );
+		return abilityMod + skillProficiencyBonus( arguments.combatant, arguments.skill );
+	}
+
+	/**
+	 * The SRD rules text for a feat — same idea as conditionDescription(),
+	 * for a tooltip on the level-up screen's feat picker.
+	 */
+	function featDescription( name ) {
+		var rows = queryExecute(
+			"SELECT description FROM feats WHERE name = :name",
+			{ "name": arguments.name },
+			{ datasource: "gameserver" }
+		);
+		return ( rows.recordCount > 0 && !isNull( rows.description[ 1 ] ) ) ? rows.description[ 1 ] : "";
+	}
+
+	/**
+	 * The SRD rules text for a class feature — same idea as featDescription(),
+	 * for a tooltip on a Features chip (character creation, character sheet,
+	 * and the combat screen's player stat card). A feature name can exist
+	 * against more than one class (e.g. "Ability Score Improvement" is
+	 * granted by every class); this just returns whichever row comes first,
+	 * since this app doesn't track which class granted a given chip in the
+	 * caller's plain name array.
+	 */
+	function featureDescription( name ) {
+		var rows = queryExecute(
+			"SELECT description FROM class_features WHERE name = :name LIMIT 1",
+			{ "name": arguments.name },
+			{ datasource: "gameserver" }
+		);
+		return ( rows.recordCount > 0 && !isNull( rows.description[ 1 ] ) ) ? rows.description[ 1 ] : "";
+	}
+
+	/**
+	 * Resolves a character's species name (which may be a subrace, e.g. "Hill
+	 * Dwarf") against the `species`/`species_traits` tables, merging in the
+	 * parent race's resistances and traits when the named species is a
+	 * subrace — a Hill Dwarf has both its own trait (Dwarven Toughness) and
+	 * every trait Dwarf grants. Returns { resistances: [], traitNames: [] };
+	 * both are empty for an unrecognized or blank species name (e.g. a
+	 * character created before species was DB-backed).
+	 */
+	function resolveSpeciesMechanics( species ) {
+		var result = { "resistances": [], "traitNames": [] };
+		if ( !len( arguments.species ) ) {
+			return result;
+		}
+
+		var speciesRows = queryExecute(
+			"SELECT s.id, s.resistances, s.parent_species_id, p.resistances AS parent_resistances
+			 FROM species s LEFT JOIN species p ON p.id = s.parent_species_id
+			 WHERE s.name = :species",
+			{ "species": arguments.species },
+			{ datasource: "gameserver" }
+		);
+		if ( speciesRows.recordCount == 0 ) {
+			return result;
+		}
+
+		var speciesIds = [ speciesRows.id[ 1 ] ];
+		for ( var resistanceList in [ speciesRows.resistances[ 1 ], speciesRows.parent_resistances[ 1 ] ] ) {
+			if ( !isNull( resistanceList ) && len( resistanceList ) ) {
+				for ( var resistance in listToArray( resistanceList, "," ) ) {
+					result.resistances.append( trim( resistance ) );
+				}
+			}
+		}
+		if ( !isNull( speciesRows.parent_species_id[ 1 ] ) ) {
+			speciesIds.append( speciesRows.parent_species_id[ 1 ] );
+		}
+
+		var traitRows = queryExecute(
+			"SELECT name FROM species_traits WHERE species_id IN (#arrayToList( speciesIds )#)",
+			{}, { datasource: "gameserver" }
+		);
+		for ( var traitRow in traitRows ) {
+			result.traitNames.append( traitRow.name );
+		}
+		return result;
+	}
+
+	/**
+	 * Public entry point for resolving a character's skill proficiencies by
+	 * species/background name alone (for callers, like CharacterService's
+	 * character sheet, that don't already have a resolveSpeciesMechanics()
+	 * result on hand). loadCharacter() calls skillProficienciesFromTraits()
+	 * directly instead, to reuse the speciesMechanics it already computed.
+	 */
+	function resolveSkillProficiencies( species, background ) {
+		return skillProficienciesFromTraits( resolveSpeciesMechanics( arguments.species ).traitNames, arguments.background );
+	}
+
+	/**
+	 * Parses a `classes.skill_proficiencies` SRD string (e.g. "Choose 2:
+	 * Acrobatics, Animal Handling, Athletics, ... or Survival", or Bard's
+	 * "Choose any 3 skills (see Playing the Game)") into
+	 * { count, options }, for the character creation wizard's skill picker.
+	 * `options` is every one of the SRD's 18 skills when the class allows
+	 * "any" skill rather than a specific list.
+	 */
+	function parseClassSkillChoice( text ) {
+		var countMatch = reFindNoCase( "Choose (?:any )?(\d+)", arguments.text, 1, true );
+		var count = ( structKeyExists( countMatch, "len" ) && countMatch.len.len() >= 2 && countMatch.len[ 2 ] > 0 )
+			? int( mid( arguments.text, countMatch.pos[ 2 ], countMatch.len[ 2 ] ) )
+			: 0;
+
+		var options = [];
+		var colonPos = find( ":", arguments.text );
+		if ( colonPos == 0 ) {
+			// No explicit list (e.g. "Choose any 3 skills ...") — any SRD skill qualifies.
+			for ( var skill in SKILL_ABILITIES ) {
+				options.append( skill );
+			}
+		} else {
+			var listText = mid( arguments.text, colonPos + 1, len( arguments.text ) );
+			listText = reReplaceNoCase( listText, "\(.*?\)", "", "all" );
+			listText = reReplaceNoCase( listText, "\bor\b", ",", "all" );
+			for ( var part in listToArray( listText, "," ) ) {
+				var trimmed = trim( part );
+				if ( len( trimmed ) ) {
+					options.append( trimmed );
+				}
+			}
+		}
+		return { "count": count, "options": options };
+	}
+
+	/**
+	 * Resolves a character's skill proficiencies from their background's
+	 * fixed `skill_proficiencies` list (e.g. Acolyte: Insight, Religion) plus
+	 * any species traits in TRAIT_SKILL_GRANTS (e.g. Elf's Keen Senses ->
+	 * Perception). Doesn't cover a class's own skill choices (`classes.
+	 * skill_proficiencies` is an unparsed "choose 2 of ..." SRD string, and
+	 * character creation has no skill-picker step) — see WIP.md.
+	 *
+	 * @traitNames Species trait names, from resolveSpeciesMechanics().traitNames.
+	 * @background characters.background.
+	 */
+	function skillProficienciesFromTraits( traitNames, background ) {
+		var skills = [];
+		if ( len( arguments.background ) ) {
+			var backgroundRows = queryExecute(
+				"SELECT skill_proficiencies FROM backgrounds WHERE name = :name",
+				{ "name": arguments.background },
+				{ datasource: "gameserver" }
+			);
+			if ( backgroundRows.recordCount > 0 && len( backgroundRows.skill_proficiencies[ 1 ] ) ) {
+				for ( var skill in listToArray( backgroundRows.skill_proficiencies[ 1 ], "," ) ) {
+					skills.append( trim( skill ) );
+				}
+			}
+		}
+		for ( var traitName in TRAIT_SKILL_GRANTS ) {
+			if ( arrayFindNoCase( arguments.traitNames, traitName ) == 0 ) {
+				continue;
+			}
+			for ( var skill in TRAIT_SKILL_GRANTS[ traitName ] ) {
+				if ( arrayFindNoCase( skills, skill ) == 0 ) {
+					skills.append( skill );
+				}
+			}
+		}
+		return skills;
+	}
+
+	/**
+	 * The Proficiency Bonus to add to `combatant`'s check for `skill`, or 0
+	 * if they aren't proficient. Monsters carry no per-skill proficiency
+	 * data (only saving throw bonuses come from their stat block), so a
+	 * combatant with no `skillProficiencies` array is treated as proficient
+	 * in everything — the same always-proficient behavior attemptGrapple()/
+	 * attemptShove() already had for every combatant before skill
+	 * proficiencies existed, preserved here so monster contests don't get
+	 * silently nerfed for lack of data.
+	 */
+	function skillProficiencyBonus( combatant, skill ) {
+		if ( !structKeyExists( arguments.combatant, "proficiencyBonus" ) ) {
+			return 0;
+		}
+		if ( !structKeyExists( arguments.combatant, "skillProficiencies" ) ) {
+			return arguments.combatant.proficiencyBonus;
+		}
+		if ( arrayFindNoCase( arguments.combatant.skillProficiencies, arguments.skill ) == 0 ) {
+			return 0;
+		}
+		// Expertise (Rogue 1, Bard 2, Ranger 9): doubled Proficiency Bonus for
+		// a player-chosen skill — see pendingExpertiseChoice()/chooseExpertise().
+		var hasExpertise = (
+			structKeyExists( arguments.combatant, "expertiseSkills" ) &&
+			arrayFindNoCase( arguments.combatant.expertiseSkills, arguments.skill ) > 0
+		);
+		return arguments.combatant.proficiencyBonus * ( hasExpertise ? 2 : 1 );
+	}
+
+	/**
+	 * Rolls a generic skill check: d20 + ability modifier + Proficiency Bonus
+	 * (only if `combatant` is proficient in `skill` — see
+	 * skillProficiencyBonus()), vs. `dc`. Mirrors rollSavingThrow()'s
+	 * shape; unlike saving throws, no species trait or condition in this
+	 * app currently grants Advantage/Disadvantage on a skill check
+	 * specifically, so there's no such hook here yet.
+	 *
+	 * @combatant The combatant making the check.
+	 * @skill One of the SRD skill names (see SKILL_ABILITIES) — e.g. "Perception".
+	 * @dc The Difficulty Class to meet or beat.
+	 */
+	function rollSkillCheck( combatant, skill, dc ) {
+		var ability = SKILL_ABILITIES[ arguments.skill ];
+		var abilityMod = structKeyExists( arguments.combatant, "modifiers" )
+			? arguments.combatant.modifiers[ ability ]
+			: abilityModifier( arguments.combatant.abilityScores[ ability ] );
+		var proficiencyBonus = skillProficiencyBonus( arguments.combatant, arguments.skill );
+		var roll = randRange( 1, 20 );
+		var total = roll + abilityMod + proficiencyBonus;
+		return { "roll": roll, "total": total, "success": ( total >= arguments.dc ), "isProficient": proficiencyBonus > 0 };
+	}
+
+}

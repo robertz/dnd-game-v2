@@ -1,0 +1,44 @@
+/**
+ * Dice notation parsing and rolling — the leaf utility every other combat
+ * service depends on. Stateless.
+ */
+class singleton {
+
+	/**
+	 * Parses "NdM" dice notation into { count, sides }. Malformed notation
+	 * (no "d") returns { count: 0, sides: 0 } so an attack with 0 dice just
+	 * deals its flat damage bonus, same as a real SRD flat-damage attack,
+	 * rather than crashing combat outright.
+	 */
+	function parseDice( notation ) {
+		var parts = listToArray( arguments.notation, "d" );
+		if ( parts.len() < 2 ) {
+			return { "count": 0, "sides": 0 };
+		}
+		return { "count": int( parts[ 1 ] ), "sides": int( parts[ 2 ] ) };
+	}
+
+	/**
+	 * Rolls `count` dice of `sides` and returns their sum.
+	 */
+	function rollSum( count, sides ) {
+		var total = 0;
+		for ( var i = 1; i <= arguments.count; i++ ) {
+			total += randRange( 1, arguments.sides );
+		}
+		return total;
+	}
+
+	/**
+	 * Rolls `count` dice of `sides`, treating any face below `minFace` as
+	 * `minFace` instead (Great Weapon Fighting: "treat any 1 or 2 as a 3").
+	 */
+	function rollSumMinFace( count, sides, minFace ) {
+		var total = 0;
+		for ( var i = 1; i <= arguments.count; i++ ) {
+			total += max( randRange( 1, arguments.sides ), arguments.minFace );
+		}
+		return total;
+	}
+
+}
