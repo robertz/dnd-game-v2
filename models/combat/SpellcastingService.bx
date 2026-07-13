@@ -287,7 +287,7 @@ class singleton {
 	private function _lookupClassSpell( className, level, preferHeal, preferredName = "" ) {
 		var preferredTypes = arguments.preferHeal ? "'heal'" : "'attack','save'";
 		var rows = queryExecute(
-			"SELECT name, level, duration, effect_type, attack_type, save_ability, save_effect, damage_dice, damage_type, heal_dice, `range`
+			"SELECT id, name, level, duration, effect_type, attack_type, save_ability, save_effect, damage_dice, damage_type, heal_dice, upcast_dice_count, upcast_dice_sides, `range`
 			 FROM spells
 			 WHERE FIND_IN_SET( :className, REPLACE( classes, ', ', ',' ) ) > 0
 			   AND level = :level
@@ -307,7 +307,7 @@ class singleton {
 			// heal-preferring class whose only level-1 option is a damage spell.
 			var fallbackTypes = arguments.preferHeal ? "'attack','save'" : "'heal'";
 			rows = queryExecute(
-				"SELECT name, level, duration, effect_type, attack_type, save_ability, save_effect, damage_dice, damage_type, heal_dice, `range`
+				"SELECT id, name, level, duration, effect_type, attack_type, save_ability, save_effect, damage_dice, damage_type, heal_dice, upcast_dice_count, upcast_dice_sides, `range`
 				 FROM spells
 				 WHERE FIND_IN_SET( :className, REPLACE( classes, ', ', ',' ) ) > 0
 				   AND level = :level
@@ -329,40 +329,110 @@ class singleton {
 
 	/**
 	 * Converts one row of a `spells` query (with the standard SELECT list
-	 * used throughout this file — name, level, duration, effect_type,
+	 * used throughout this file — id, name, level, duration, effect_type,
 	 * attack_type, save_ability, save_effect, damage_dice, damage_type,
-	 * heal_dice, `range`) into the discriminated struct shape castCantrip()/
-	 * castLeveledSpell()/_runOneOpponentTurn() all expect. Shared by
-	 * _lookupClassSpell() (picks one row), listCastableSpells() (every
-	 * matching row), and lookupSpellByName() (one row by exact name).
+	 * heal_dice, upcast_dice_count, upcast_dice_sides, `range`) into the
+	 * discriminated struct shape castCantrip()/castLeveledSpell()/
+	 * _runOneOpponentTurn() all expect. Shared by _lookupClassSpell() (picks
+	 * one row), listCastableSpells() (every matching row), and
+	 * lookupSpellByName() (one row by exact name).
 	 *
 	 * `level` lets castLeveledSpell() spend the correct-level slot
 	 * instead of always assuming 1st; `concentration` (derived from the
 	 * `duration` text, e.g. "Concentration, up to 1 minute" — there's no
 	 * dedicated boolean column) drives the single-concentration-spell rule
-	 * in _startConcentrating().
+	 * in _startConcentrating(). `upcastDice` (omitted if the spell has no
+	 * per-level scaling modeled — see db/README.md's spells table notes)
+	 * lets castLeveledSpellFor() add bonus dice when cast with a
+	 * higher-than-minimum slot. `extraEffects` (omitted for the overwhelming
+	 * majority of spells, which have none) carries any rows from
+	 * `spell_effects` — see _loadExtraEffects().
 	 */
 	private function _spellStructFromRow( rows, i ) {
 		var level = arguments.rows.level[ arguments.i ];
 		var concentration = findNoCase( "Concentration", arguments.rows.duration[ arguments.i ] ) > 0;
+		var upcastCount = arguments.rows.upcast_dice_count[ arguments.i ];
+		var upcastSides = arguments.rows.upcast_dice_sides[ arguments.i ];
+		var upcastDice = ( !isNull( upcastCount ) && !isNull( upcastSides ) ) ? { "count": upcastCount, "sides": upcastSides } : javaCast( "null", 0 );
+
 		if ( arguments.rows.effect_type[ arguments.i ] == "heal" ) {
 			var healDice = variables.dice.parseDice( arguments.rows.heal_dice[ arguments.i ] );
-			return { "type": "heal", "name": arguments.rows.name[ arguments.i ], "level": level, "concentration": concentration, "diceCount": healDice.count, "diceSides": healDice.sides };
+			var healSpell = { "type": "heal", "name": arguments.rows.name[ arguments.i ], "level": level, "concentration": concentration, "diceCount": healDice.count, "diceSides": healDice.sides };
+			if ( !isNull( upcastDice ) ) {
+				healSpell[ "upcastDice" ] = upcastDice;
+			}
+			return healSpell;
 		}
 
 		var damageDice = variables.dice.parseDice( arguments.rows.damage_dice[ arguments.i ] );
 		var rangeSquares = _parseSpellRangeSquares( arguments.rows.range[ arguments.i ] );
+		var extraEffects = _loadExtraEffects( arguments.rows.id[ arguments.i ] );
 		if ( arguments.rows.effect_type[ arguments.i ] == "attack" ) {
-			return {
+			var attackSpell = {
 				"type": "attack", "name": arguments.rows.name[ arguments.i ], "level": level, "concentration": concentration, "damageType": arguments.rows.damage_type[ arguments.i ],
 				"diceCount": damageDice.count, "diceSides": damageDice.sides, "flatBonus": damageDice.flatBonus, "rangeSquares": rangeSquares
 			};
+			if ( !isNull( upcastDice ) ) {
+				attackSpell[ "upcastDice" ] = upcastDice;
+			}
+			if ( extraEffects.len() ) {
+				attackSpell[ "extraEffects" ] = extraEffects;
+			}
+			return attackSpell;
 		}
-		return {
+		var saveSpell = {
 			"type": "save", "name": arguments.rows.name[ arguments.i ], "level": level, "concentration": concentration, "damageType": arguments.rows.damage_type[ arguments.i ],
 			"saveAbility": arguments.rows.save_ability[ arguments.i ], "saveEffect": arguments.rows.save_effect[ arguments.i ],
 			"diceCount": damageDice.count, "diceSides": damageDice.sides, "flatBonus": damageDice.flatBonus, "rangeSquares": rangeSquares
 		};
+		if ( !isNull( upcastDice ) ) {
+			saveSpell[ "upcastDice" ] = upcastDice;
+		}
+		if ( extraEffects.len() ) {
+			saveSpell[ "extraEffects" ] = extraEffects;
+		}
+		return saveSpell;
+	}
+
+	/**
+	 * Loads `spellId`'s secondary damage effects from `spell_effects`, if
+	 * any — see db/README.md's notes on multi-effect spells. Each entry is
+	 * `{ trigger, diceCount, diceSides, damageType, upcastDice, effectType,
+	 * saveAbility, saveEffect, aoeRadiusSquares }`, where the last four are
+	 * only populated for `trigger == "separate_roll"` (a `same_roll` effect
+	 * shares the primary effect's own attack/save resolution — see
+	 * castLeveledSpellFor()). Returns `[]` for the overwhelming majority of
+	 * spells, which have no row here at all.
+	 *
+	 * @spellId The spell's own `id` in the `spells` table.
+	 */
+	private function _loadExtraEffects( spellId ) {
+		var rows = queryExecute(
+			"SELECT trigger_type, effect_type, save_ability, save_effect, damage_dice, damage_type, upcast_dice_count, upcast_dice_sides, aoe_radius_squares
+			 FROM spell_effects
+			 WHERE spell_id = :spellId
+			 ORDER BY sequence",
+			{ "spellId": arguments.spellId },
+			{ datasource: "gameserver" }
+		);
+		var results = [];
+		for ( var i = 1; i <= rows.recordCount; i++ ) {
+			var dice = variables.dice.parseDice( rows.damage_dice[ i ] );
+			var effect = {
+				"trigger": rows.trigger_type[ i ], "diceCount": dice.count, "diceSides": dice.sides, "damageType": rows.damage_type[ i ]
+			};
+			if ( !isNull( rows.upcast_dice_count[ i ] ) && !isNull( rows.upcast_dice_sides[ i ] ) ) {
+				effect[ "upcastDice" ] = { "count": rows.upcast_dice_count[ i ], "sides": rows.upcast_dice_sides[ i ] };
+			}
+			if ( rows.trigger_type[ i ] == "separate_roll" ) {
+				effect[ "effectType" ] = rows.effect_type[ i ];
+				effect[ "saveAbility" ] = rows.save_ability[ i ];
+				effect[ "saveEffect" ] = rows.save_effect[ i ];
+				effect[ "aoeRadiusSquares" ] = isNull( rows.aoe_radius_squares[ i ] ) ? 0 : rows.aoe_radius_squares[ i ];
+			}
+			results.append( effect );
+		}
+		return results;
 	}
 
 	/**
@@ -377,7 +447,7 @@ class singleton {
 	 */
 	function listCastableSpells( className, level ) {
 		var rows = queryExecute(
-			"SELECT name, level, duration, effect_type, attack_type, save_ability, save_effect, damage_dice, damage_type, heal_dice, `range`
+			"SELECT id, name, level, duration, effect_type, attack_type, save_ability, save_effect, damage_dice, damage_type, heal_dice, upcast_dice_count, upcast_dice_sides, `range`
 			 FROM spells
 			 WHERE FIND_IN_SET( :className, REPLACE( classes, ', ', ',' ) ) > 0
 			   AND level = :level
@@ -406,7 +476,7 @@ class singleton {
 	 */
 	function lookupSpellByName( name ) {
 		var rows = queryExecute(
-			"SELECT name, level, duration, effect_type, attack_type, save_ability, save_effect, damage_dice, damage_type, heal_dice, `range`
+			"SELECT id, name, level, duration, effect_type, attack_type, save_ability, save_effect, damage_dice, damage_type, heal_dice, upcast_dice_count, upcast_dice_sides, `range`
 			 FROM spells
 			 WHERE name = :name
 			   AND effect_type IN ( 'attack', 'save', 'heal' )

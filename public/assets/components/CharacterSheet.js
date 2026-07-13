@@ -238,12 +238,17 @@ const CharacterSheet = {
 
 					<!-- Spells tab -->
 					<div v-if="tab === 'spells'" class="sheet-tab-panel">
-						<template v-if="(character.knownCantripNames && character.knownCantripNames.length) || (character.knownSpellNames && character.knownSpellNames.length)">
+						<template v-if="character.knownSpellsByLevel && character.knownSpellsByLevel.length">
 							<h3 class="fantasy-heading">Known Spells</h3>
-							<p class="stat-subtitle" style="margin:0 0 0.75rem;">
-								<template v-if="character.knownCantripNames && character.knownCantripNames.length">Cantrips: {{ character.knownCantripNames.join(', ') }}<br></template>
-								<template v-if="character.knownSpellNames && character.knownSpellNames.length">Spells: {{ character.knownSpellNames.join(', ') }}</template>
-							</p>
+							<template v-for="group in character.knownSpellsByLevel" :key="group.level">
+								<p class="stat-subtitle" style="margin:0.5rem 0 0.25rem;">{{ group.level === 0 ? 'Cantrips' : 'Level ' + group.level }}</p>
+								<div class="creation-grid">
+									<div v-for="opt in group.spells" :key="opt.name" class="creation-card creation-card-compact">
+										<h4 class="fantasy-heading" style="margin:0 0 0.25rem;">{{ opt.name }}</h4>
+										<p class="stat-subtitle" style="margin:0;">{{ describeSpell(opt) }}</p>
+									</div>
+								</div>
+							</template>
 						</template>
 						<template v-if="cantripOptions.length">
 							<h3 class="fantasy-heading">Starting Cantrip</h3>
@@ -512,6 +517,7 @@ const CharacterSheet = {
 		}
 
 		function describeSpell( spell ) {
+			if ( !spell.type ) return "";
 			if ( spell.type === "heal" ) return `Heal — ${ spell.diceCount }d${ spell.diceSides }`;
 			if ( spell.type === "attack" ) return `Attack — ${ spell.diceCount }d${ spell.diceSides } ${ spell.damageType }`;
 			return `Save (${ (spell.saveAbility||"").toUpperCase() }) — ${ spell.diceCount }d${ spell.diceSides } ${ spell.damageType }`;

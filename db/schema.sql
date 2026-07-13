@@ -500,6 +500,30 @@ CREATE TABLE `species_traits` (
   CONSTRAINT `fk_species_traits_species` FOREIGN KEY (`species_id`) REFERENCES `species` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB AUTO_INCREMENT=35 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
+DROP TABLE IF EXISTS `spell_effects`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!50503 SET character_set_client = utf8mb4 */;
+CREATE TABLE `spell_effects` (
+  `id` int unsigned NOT NULL AUTO_INCREMENT,
+  `spell_id` int unsigned NOT NULL,
+  `sequence` tinyint unsigned NOT NULL DEFAULT '1',
+  `trigger_type` enum('same_roll','separate_roll') COLLATE utf8mb4_unicode_ci NOT NULL,
+  `effect_type` enum('attack','save') COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'only used for separate_roll; same_roll inherits the primary effect''s resolution',
+  `attack_type` enum('melee','ranged') COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `save_ability` enum('str','dex','con','int','wis','cha') COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `save_effect` enum('half','none') COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `damage_dice` varchar(20) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `damage_type` varchar(50) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `upcast_dice_count` tinyint unsigned DEFAULT NULL,
+  `upcast_dice_sides` tinyint unsigned DEFAULT NULL,
+  `aoe_radius_squares` tinyint unsigned DEFAULT NULL COMMENT 'separate_roll only: also hits other living combatants on the same side within this many squares of the primary target',
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_spell_effects_spell` (`spell_id`),
+  CONSTRAINT `fk_spell_effects_spell` FOREIGN KEY (`spell_id`) REFERENCES `spells` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB AUTO_INCREMENT=3 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
 DROP TABLE IF EXISTS `spells`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
@@ -522,6 +546,8 @@ CREATE TABLE `spells` (
   `damage_dice` varchar(20) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `damage_type` varchar(50) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `heal_dice` varchar(20) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `upcast_dice_count` tinyint unsigned DEFAULT NULL,
+  `upcast_dice_sides` tinyint unsigned DEFAULT NULL,
   `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),

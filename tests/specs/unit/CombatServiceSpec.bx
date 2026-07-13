@@ -2092,6 +2092,96 @@ class extends="testbox.system.BaseSpec" {
 					// 1d1 always rolls 1, so a failed save deals exactly 1 + 30 = 31.
 					expect( 500 - opponent.hitPoints ).toBe( 31 );
 				} );
+
+				it( "castLeveledSpell() adds upcast dice when cast with a slot above the spell's own level", () => {
+					// Only a level-5 slot is available for a level-3 spell, so
+					// _spendSpellSlot() is forced to spend 2 levels above minimum —
+					// upcastDice.count (1) * extraLevels (2) = 2 extra 1d1 dice.
+					var player = makeCaster( { "spellSlots": { "5": 1 }, "knownLeveledSpells": [
+						{
+							"type": "save", "name": "Upcast Bolt", "damageType": "Force", "saveAbility": "con", "saveEffect": "half",
+							"rangeSquares": 24, "level": 3, "concentration": false, "diceCount": 1, "diceSides": 1,
+							"upcastDice": { "count": 1, "sides": 1 }
+						}
+					] } );
+					var opponent = makeCombatant( 1, 0, { "modifiers": { "con": -50 } } );
+					var state = makeSpellState( player, { "opponent": opponent } );
+					service.castLeveledSpell( state );
+					// Base 1d1 (1) + 2 extra 1d1 (2) = 3 on a failed save.
+					expect( 500 - opponent.hitPoints ).toBe( 3 );
+				} );
+
+				it( "castLeveledSpell() adds no upcast bonus when cast at the spell's own level", () => {
+					var player = makeCaster( { "spellSlots": { "3": 1 }, "knownLeveledSpells": [
+						{
+							"type": "save", "name": "Upcast Bolt", "damageType": "Force", "saveAbility": "con", "saveEffect": "half",
+							"rangeSquares": 24, "level": 3, "concentration": false, "diceCount": 1, "diceSides": 1,
+							"upcastDice": { "count": 1, "sides": 1 }
+						}
+					] } );
+					var opponent = makeCombatant( 1, 0, { "modifiers": { "con": -50 } } );
+					var state = makeSpellState( player, { "opponent": opponent } );
+					service.castLeveledSpell( state );
+					expect( 500 - opponent.hitPoints ).toBe( 1 );
+				} );
+
+				it( "castLeveledSpell() adds a same_roll extra effect's damage on top of the primary damage (e.g. Ice Storm's Bludgeoning + Cold)", () => {
+					var player = makeCaster( { "spellSlots": { "4": 1 }, "knownLeveledSpells": [
+						{
+							"type": "save", "name": "Icy Blast", "damageType": "Bludgeoning", "saveAbility": "dex", "saveEffect": "half",
+							"rangeSquares": 12, "level": 4, "concentration": false, "diceCount": 1, "diceSides": 1,
+							"extraEffects": [ { "trigger": "same_roll", "diceCount": 1, "diceSides": 1, "damageType": "Cold" } ]
+						}
+					] } );
+					var opponent = makeCombatant( 1, 0, { "modifiers": { "dex": -50 } } );
+					var state = makeSpellState( player, { "opponent": opponent } );
+					service.castLeveledSpell( state );
+					// Failed save: 1d1 Bludgeoning (1) + 1d1 Cold (1) = 2.
+					expect( 500 - opponent.hitPoints ).toBe( 2 );
+					expect( state.log[ 1 ] ).toInclude( "1 Bludgeoning" );
+					expect( state.log[ 1 ] ).toInclude( "1 Cold" );
+				} );
+
+				it( "castLeveledSpell() halves a same_roll extra effect's damage independently on a successful save", () => {
+					var player = makeCaster( { "spellSlots": { "4": 1 }, "knownLeveledSpells": [
+						{
+							"type": "save", "name": "Icy Blast", "damageType": "Bludgeoning", "saveAbility": "dex", "saveEffect": "half",
+							"rangeSquares": 12, "level": 4, "concentration": false, "diceCount": 2, "diceSides": 1,
+							"extraEffects": [ { "trigger": "same_roll", "diceCount": 2, "diceSides": 1, "damageType": "Cold" } ]
+						}
+					] } );
+					// +50 Dexterity guarantees a successful save regardless of the d20 roll.
+					var opponent = makeCombatant( 1, 0, { "modifiers": { "dex": 50 } } );
+					var state = makeSpellState( player, { "opponent": opponent } );
+					service.castLeveledSpell( state );
+					// Successful save halves each type on its own: 2d1 (2) -> 1 Bludgeoning, 2d1 (2) -> 1 Cold.
+					expect( 500 - opponent.hitPoints ).toBe( 2 );
+				} );
+
+				it( "castLeveledSpell() fires a chained separate_roll extra effect against nearby targets regardless of the primary attack's hit or miss (e.g. Ice Knife's explosion)", () => {
+					var player = makeCaster( { "spellSlots": { "1": 1 }, "knownLeveledSpells": [
+						{
+							"type": "attack", "name": "Icy Shard", "damageType": "Piercing", "rangeSquares": 12, "level": 1, "concentration": false,
+							"diceCount": 1, "diceSides": 1,
+							"extraEffects": [ {
+								"trigger": "separate_roll", "effectType": "save", "saveAbility": "dex", "saveEffect": "half",
+								"diceCount": 1, "diceSides": 1, "damageType": "Cold", "aoeRadiusSquares": 1
+							} ]
+						}
+					] } );
+					// Impossibly high AC guarantees the primary attack roll misses, proving
+					// the chained explosion still fires per "Hit or miss, the shard explodes."
+					var primaryTarget = makeCombatant( 1, 0, { "armorClass": 999, "modifiers": { "dex": -50 } } );
+					var nearbyOpponent = makeCombatant( 2, 0, { "armorClass": 999, "modifiers": { "dex": -50 } } );
+					var state = makeSpellState( player, { "opponent": primaryTarget, "opponents": [ primaryTarget, nearbyOpponent ] } );
+					service.castLeveledSpell( state );
+					expect( 500 - primaryTarget.hitPoints ).toBe( 1 );
+					expect( 500 - nearbyOpponent.hitPoints ).toBe( 1 );
+					// The chained effect's own log line was prepended after the primary
+					// attack's, so it's newest (index 1); the miss is right behind it.
+					expect( state.log[ 1 ] ).toInclude( "explodes" );
+					expect( state.log[ 2 ] ).toInclude( "Miss!" );
+				} );
 			} );
 
 			describe( "hasSpellResource() (gates the combat screen's Cast buttons)", () => {
@@ -2952,6 +3042,75 @@ class extends="testbox.system.BaseSpec" {
 						expect( ally.isStable ).toBeFalse();
 						expect( ally.deathSaveSuccesses ).toBe( 0 );
 						expect( ally.deathSaveFailures ).toBe( 0 );
+					} );
+				} );
+
+				describe( "Mass Healing Word heals every party member within 60 ft. (castLeveledSpell())", () => {
+					function makeMassHealState(){
+						var caster = makeCombatant( 1, 1, {
+							"characterId": 301, "name": "Cleric",
+							"modifiers": { "wis": 3 }, "proficiencyBonus": 2, "spellcastingAbility": "wis",
+							"spellSlots": { "3": 1 }, "hitPoints": 20, "maxHitPoints": 20,
+							"knownLeveledSpells": [ { "type": "heal", "name": "Mass Healing Word", "level": 3, "concentration": false, "diceCount": 2, "diceSides": 4 } ]
+						} );
+						// nearAlly: 11 squares away (within the 12-square/60 ft. radius).
+						// farAlly: 13 squares away (just outside it).
+						var nearAlly = makeCombatant( 12, 1, { "characterId": 302, "name": "Near", "hitPoints": 5, "maxHitPoints": 30 } );
+						var farAlly = makeCombatant( 14, 1, { "characterId": 303, "name": "Far", "hitPoints": 5, "maxHitPoints": 30 } );
+						return {
+							"player": caster, "players": [ caster, nearAlly, farAlly ], "activePlayerIndex": 1,
+							"opponent": makeCombatant( 5, 5 ), "opponents": [],
+							"log": [], "actionUsed": false, "gameOver": false, "outcome": ""
+						};
+					}
+
+					it( "heals the caster and every ally within range, but not one beyond it", () => {
+						var state = makeMassHealState();
+						state.player.hitPoints = 10;
+						service.castLeveledSpell( state, "Mass Healing Word" );
+						expect( state.player.hitPoints ).toBeGT( 10 );
+						expect( state.players[ 2 ].hitPoints ).toBeGT( 5 ); // nearAlly
+						expect( state.players[ 3 ].hitPoints ).toBe( 5 ); // farAlly, untouched
+						expect( state.log[ 1 ] ).toInclude( "Cleric" );
+						expect( state.log[ 1 ] ).toInclude( "Near" );
+						expect( state.log[ 1 ] ).notToInclude( "Far" );
+					} );
+
+					it( "revives a downed ally within range, same as a single-target heal", () => {
+						var state = makeMassHealState();
+						var nearAlly = state.players[ 2 ];
+						nearAlly.hitPoints = 0;
+						nearAlly.isDying = true;
+						nearAlly.deathSaveFailures = 2;
+						service.castLeveledSpell( state, "Mass Healing Word" );
+						expect( nearAlly.hitPoints ).toBeGT( 0 );
+						expect( nearAlly.isDying ).toBeFalse();
+						expect( nearAlly.deathSaveFailures ).toBe( 0 );
+					} );
+
+					it( "adds upcast dice to every healed member's roll when cast with a slot above the spell's own level", () => {
+						// Only a level-5 slot is available for a level-3 spell —
+						// _spendSpellSlot() spends 2 levels above minimum, so each
+						// target's heal gets upcastDice.count (1) * extraLevels (2) = 2
+						// extra 1d1 dice on top of the base 1d1, with 0 spellcasting mod.
+						var caster = makeCombatant( 1, 1, {
+							"characterId": 301, "name": "Cleric",
+							"modifiers": { "wis": 0 }, "proficiencyBonus": 2, "spellcastingAbility": "wis",
+							"spellSlots": { "5": 1 }, "hitPoints": 10, "maxHitPoints": 20,
+							"knownLeveledSpells": [ {
+								"type": "heal", "name": "Mass Healing Word", "level": 3, "concentration": false,
+								"diceCount": 1, "diceSides": 1, "upcastDice": { "count": 1, "sides": 1 }
+							} ]
+						} );
+						var ally = makeCombatant( 2, 1, { "characterId": 302, "name": "Near", "hitPoints": 5, "maxHitPoints": 30 } );
+						var state = {
+							"player": caster, "players": [ caster, ally ], "activePlayerIndex": 1,
+							"opponent": makeCombatant( 5, 5 ), "opponents": [],
+							"log": [], "actionUsed": false, "gameOver": false, "outcome": ""
+						};
+						service.castLeveledSpell( state );
+						expect( caster.hitPoints ).toBe( 10 + 3 ); // base 1d1 + 2 extra 1d1 (upcast) + 0 mod
+						expect( ally.hitPoints ).toBe( 5 + 3 );
 					} );
 				} );
 			} );

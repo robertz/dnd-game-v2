@@ -567,6 +567,9 @@ class singleton {
 			}
 		}
 
+		var knownCantripNames = len( row.known_cantrips[ 1 ] ) ? listToArray( row.known_cantrips[ 1 ] ) : [];
+		var knownSpellNames = len( row.known_spells[ 1 ] ) ? listToArray( row.known_spells[ 1 ] ) : [];
+
 		var sheet = {
 			"characterId": row.id[ 1 ],
 			"name": row.name[ 1 ],
@@ -627,14 +630,18 @@ class singleton {
 			"expertiseSkills": len( row.expertise_skills[ 1 ] ) ? listToArray( row.expertise_skills[ 1 ] ) : [],
 			// Full list of known cantrips/leveled spells (starting choice plus
 			// anything learned since via learnCantrip()/learnSpell()).
-			"knownCantripNames": len( row.known_cantrips[ 1 ] ) ? listToArray( row.known_cantrips[ 1 ] ) : [],
-			"knownSpellNames": len( row.known_spells[ 1 ] ) ? listToArray( row.known_spells[ 1 ] ) : [],
+			"knownCantripNames": knownCantripNames,
+			"knownSpellNames": knownSpellNames,
+			// Known Spells tab display: both lists resolved to full spell
+			// mechanics and grouped by level (cantrips are level 0) — see
+			// _groupKnownSpellsByLevel().
+			"knownSpellsByLevel": _groupKnownSpellsByLevel( _concatArrays( knownCantripNames, knownSpellNames ) ),
 			// The original starting choice (index 1) — the Spells tab's
 			// "change your starting cantrip/spell" picker only ever edits this
 			// slot; anything learned later is added, never replaced, via the
 			// pending cantrip/spell choice panel instead.
-			"knownCantripName": len( row.known_cantrips[ 1 ] ) ? listToArray( row.known_cantrips[ 1 ] )[ 1 ] : "",
-			"knownSpellName": len( row.known_spells[ 1 ] ) ? listToArray( row.known_spells[ 1 ] )[ 1 ] : "",
+			"knownCantripName": knownCantripNames.len() ? knownCantripNames[ 1 ] : "",
+			"knownSpellName": knownSpellNames.len() ? knownSpellNames[ 1 ] : "",
 			// { pending, availableStyles } — see CombatService.pendingFightingStyleChoice().
 			"fightingStyleChoice": combatService.pendingFightingStyleChoice( arguments.characterId ),
 			// { pending, availableCantrips } — Blessed Warrior/Druidic Warrior's
@@ -1148,6 +1155,42 @@ class singleton {
 			}
 		}
 		return merged;
+	}
+
+	private function _concatArrays( a, b ) {
+		var result = duplicate( arguments.a );
+		for ( var item in arguments.b ) {
+			result.append( item );
+		}
+		return result;
+	}
+
+	/**
+	 * Resolves known cantrip/spell names (as stored, flat and unordered) into
+	 * full spell structs grouped by level for the character sheet's Known
+	 * Spells display — e.g. `[{ level: 0, spells: [...] }, { level: 3, spells: [...] }]`,
+	 * sorted ascending. A name that doesn't resolve to a mechanized spell
+	 * (lookupSpellByName() returns null — a content gap, see its doc comment)
+	 * still shows up, just as a name-only entry under its own group so
+	 * nothing known is silently dropped from the sheet.
+	 */
+	private function _groupKnownSpellsByLevel( names ) {
+		var byLevel = {};
+		for ( var name in arguments.names ) {
+			var spell = combatService.lookupSpellByName( name );
+			var level = isNull( spell ) ? -1 : spell.level;
+			if ( !byLevel.keyExists( level ) ) {
+				byLevel[ level ] = [];
+			}
+			byLevel[ level ].append( isNull( spell ) ? { "name": name, "level": level } : spell );
+		}
+		var levels = byLevel.keyArray().map( function( k ) { return val( k ); } );
+		levels.sort( "numeric" );
+		var groups = [];
+		for ( var level in levels ) {
+			groups.append( { "level": level, "spells": byLevel[ level ] } );
+		}
+		return groups;
 	}
 
 	/**

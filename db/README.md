@@ -3,15 +3,50 @@
 Two files, generated from the live `gameserver` database rather than
 hand-maintained as incremental migrations:
 
-- **`schema.sql`** — structure only (all 26 tables, indexes, foreign keys).
+- **`schema.sql`** — structure only (all 27 tables, indexes, foreign keys).
 - **`seed.sql`** — reference/content data only: classes, subclasses, class
-  features, feats, magic items, monsters, spells, weapons, armors, items,
-  species, species traits, backgrounds, conditions, and the built-in
-  adventure modules/maps. Deliberately excludes user/runtime tables
+  features, feats, magic items, monsters, spells, spell effects, weapons,
+  armors, items, species, species traits, backgrounds, conditions, and the
+  built-in adventure modules/maps. Deliberately excludes user/runtime tables
   (`users`, `characters`, `character_inventory`, `character_features`,
   `character_feats`, `character_armor`, `character_items`,
   `character_multiclass_levels`) — those start empty; accounts and
   characters are created through the app itself.
+
+## Spells: `upcast_dice_count`/`upcast_dice_sides` and `spell_effects`
+
+Each spell mechanizes at most one primary damage/heal effect directly on
+`spells` (`damage_dice`/`damage_type` or `heal_dice`). `upcast_dice_count`/
+`upcast_dice_sides` (nullable) hold the bonus dice added per slot level
+above the spell's own, parsed from `higher_level_text` — NULL means no
+upcast bonus is modeled, either because the spell has no such text or
+because the text doesn't fit a simple dice-bonus model (e.g. Chain
+Lightning/Scorching Ray grant an extra projectile per level, not bigger
+dice; Geas extends duration).
+
+A spell with more than one simultaneous damage effect (found via a manual
+audit, not automatically) gets one or more rows in `spell_effects` instead
+of trying to cram a second damage type onto `spells` itself:
+
+- `trigger_type = 'same_roll'` — shares the primary effect's own attack/
+  save roll and outcome; just a second damage type added to the total
+  (e.g. Ice Storm: one Dex save, Bludgeoning + Cold together, each halved
+  independently on a success so per-type resistance/immunity still
+  applies correctly).
+- `trigger_type = 'separate_roll'` — its own independent roll against its
+  own target(s), fired unconditionally after the primary effect resolves,
+  regardless of whether the primary effect hit/succeeded. `aoe_radius_squares`
+  optionally extends the target list to every other living combatant on the
+  same side within that many squares of the primary target (e.g. Ice Knife:
+  an attack roll for Piercing damage, then — hit or miss — a separate Dex
+  save for Cold damage against the target *and* anyone within 5 ft./1 square
+  of it).
+
+Not every multi-effect spell fits even this: delayed/DoT damage on a later
+turn (Acid Arrow, Vitriolic Sphere), random sub-effect tables (Prismatic
+Spray), and multi-round escalating spells (Storm of Vengeance, Tsunami)
+are architecturally different problems (timing/scheduling, not "more than
+one effect") and aren't modeled at all — see development.md.
 
 ## Setup
 
@@ -44,8 +79,8 @@ mysqldump -u root --no-data --set-gtid-purged=OFF --skip-comments gameserver \
   > db/schema.sql
 
 mysqldump -u root --no-create-info --complete-insert --set-gtid-purged=OFF --skip-comments \
-  gameserver classes subclasses class_features feats magic_items monsters spells weapons \
-  armors items species species_traits backgrounds conditions \
+  gameserver classes subclasses class_features feats magic_items monsters spells spell_effects \
+  weapons armors items species species_traits backgrounds conditions \
   adventure_modules adventure_maps adventure_map_chunks adventure_map_pois \
   > db/seed.sql
 ```

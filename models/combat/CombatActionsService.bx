@@ -1745,28 +1745,112 @@ class singleton {
 			_startConcentrating( arguments.state, arguments.attacker, arguments.spell.name );
 		}
 		var spell = arguments.spell;
+		// Upcasting: spent a slot above the spell's own level (never true for
+		// Magic Initiate's bonus spell, which always casts at base level since
+		// slotSpent is 0 there) — see spell.upcastDice's doc comment in
+		// SpellcastingService._spellStructFromRow() for which spells have this
+		// modeled at all.
+		var extraLevels = max( 0, slotSpent - spellLevel );
+		var extraDiceCount = ( extraLevels > 0 && spell.keyExists( "upcastDice" ) ) ? spell.upcastDice.count * extraLevels : 0;
+		var extraDiceSides = ( extraDiceCount > 0 ) ? spell.upcastDice.sides : 0;
 		var resourceNote = usedMagicInitiate ? " (Magic Initiate's bonus spell)" : " (spends a level-#slotSpent# slot)";
 		var flatBonus = spell.keyExists( "flatBonus" ) ? spell.flatBonus : 0;
-		if ( spell.type == "heal" ) {
-			_castHealSpell( arguments.state, arguments.attacker, arguments.defender, spell.name, resourceNote, spell.diceCount, spell.diceSides );
+		if ( extraDiceCount > 0 && spell.type != "heal" ) {
+			flatBonus += variables.dice.rollSum( extraDiceCount, extraDiceSides );
+		}
+		// Multi-effect spells (see SpellcastingService._loadExtraEffects()):
+		// a "same_roll" effect (e.g. Ice Storm's Cold damage) shares the
+		// primary effect's own attack/save roll, so it's resolved inline by
+		// _castAttackSpell()/_castSaveDamageSpell(); a "separate_roll" effect
+		// (e.g. Ice Knife's explosion) gets its own roll against its own
+		// target(s), fired unconditionally after the primary effect below.
+		var sameRollExtras = [];
+		var chainedExtras = [];
+		if ( spell.keyExists( "extraEffects" ) ) {
+			for ( var fx in spell.extraEffects ) {
+				if ( fx.trigger == "same_roll" ) {
+					sameRollExtras.append( _resolveExtraDamageComponent( fx, extraLevels ) );
+				} else {
+					chainedExtras.append( fx );
+				}
+			}
+		}
+		if ( spell.type == "heal" && spell.name == "Mass Healing Word" ) {
+			// 60 ft. radius, per the SRD — a flat 12 squares at 5 ft./square
+			// rather than spell.rangeSquares, since heal-type spell structs
+			// don't carry a parsed range (see _spellStructFromRow()).
+			_castMassHealSpell( arguments.state, arguments.attacker, spell.name, resourceNote, spell.diceCount, spell.diceSides, 12, extraDiceCount, extraDiceSides );
+		} else if ( spell.type == "heal" ) {
+			_castHealSpell( arguments.state, arguments.attacker, arguments.defender, spell.name, resourceNote, spell.diceCount, spell.diceSides, extraDiceCount, extraDiceSides );
 		} else if ( spell.type == "attack" ) {
-			_castAttackSpell( arguments.state, arguments.attacker, arguments.defender, arguments.defenderIsPlayer, spell.name, spell.diceCount, spell.diceSides, spell.damageType, resourceNote, flatBonus );
+			_castAttackSpell( arguments.state, arguments.attacker, arguments.defender, arguments.defenderIsPlayer, spell.name, spell.diceCount, spell.diceSides, spell.damageType, resourceNote, flatBonus, sameRollExtras );
 		} else if ( spell.type == "save" ) {
-			_castSaveDamageSpell( arguments.state, arguments.attacker, arguments.defender, arguments.defenderIsPlayer, spell.name, spell.saveAbility, spell.diceCount, spell.diceSides, spell.damageType, spell.saveEffect, resourceNote, flatBonus );
+			_castSaveDamageSpell( arguments.state, arguments.attacker, arguments.defender, arguments.defenderIsPlayer, spell.name, spell.saveAbility, spell.diceCount, spell.diceSides, spell.damageType, spell.saveEffect, resourceNote, flatBonus, sameRollExtras );
 		} else {
 			// Legacy fallback: Magic Initiate's default bonus spell when no
 			// real DB spell was found for the class ({"type":"damage","name":"Magic Missile"}).
 			_castMagicMissile( arguments.state, arguments.attacker, arguments.defender, arguments.defenderIsPlayer, resourceNote );
 		}
+		for ( var fx in chainedExtras ) {
+			_castChainedSpellEffect( arguments.state, arguments.attacker, arguments.defender, arguments.defenderIsPlayer, spell.name, _resolveExtraDamageComponent( fx, extraLevels ), resourceNote );
+		}
+	}
+
+	/**
+	 * Rolls `effect`'s own upcast dice (if any) against `extraLevels` —
+	 * mirrors castLeveledSpellFor()'s handling of the primary effect's
+	 * `upcastDice`, but per-effect since a same_roll/separate_roll extra
+	 * effect can have its own upcast scaling independent of the primary
+	 * effect's (e.g. Ice Knife's Cold explosion upcasts on its own; the
+	 * primary Piercing attack roll doesn't upcast at all).
+	 */
+	private function _resolveExtraDamageComponent( effect, extraLevels ) {
+		var resolved = duplicate( arguments.effect );
+		var extraDiceCount = ( arguments.extraLevels > 0 && resolved.keyExists( "upcastDice" ) ) ? resolved.upcastDice.count * arguments.extraLevels : 0;
+		resolved[ "extraDiceCount" ] = extraDiceCount;
+		resolved[ "extraDiceSides" ] = ( extraDiceCount > 0 ) ? resolved.upcastDice.sides : 0;
+		return resolved;
+	}
+
+	/**
+	 * Rolls and applies each of `extras` — same_roll extra effects, already
+	 * resolved via _resolveExtraDamageComponent() — against `defender`,
+	 * sharing the primary effect's own hit/save outcome (see
+	 * castLeveledSpellFor()). `critMultiplier` doubles an attack spell's
+	 * extra dice on a crit, same as the primary damage; `halveOnSuccess`/
+	 * `negateOnSuccess` mirror a save spell's saveEffect rule, applied to
+	 * each extra effect independently (each damage type is "half as much
+	 * damage" on its own, not the combined total, so resistance/vulnerability
+	 * per type still lands correctly). Returns `{ totalDamage, parts }` —
+	 * `parts` is an array of "N Type" strings for the combined log line.
+	 */
+	private function _resolveExtraDamage( defender, extras, critMultiplier = 1, halveOnSuccess = false, negateOnSuccess = false ) {
+		var totalDamage = 0;
+		var parts = [];
+		for ( var extra in arguments.extras ) {
+			var amount = variables.dice.rollSum( extra.diceCount * arguments.critMultiplier, extra.diceSides )
+				+ ( extra.extraDiceCount > 0 ? variables.dice.rollSum( extra.extraDiceCount * arguments.critMultiplier, extra.extraDiceSides ) : 0 );
+			if ( arguments.negateOnSuccess ) {
+				amount = 0;
+			} else if ( arguments.halveOnSuccess ) {
+				amount = int( amount / 2 );
+			}
+			amount = applyDamageModifiers( arguments.defender, amount, extra.damageType );
+			totalDamage += amount;
+			parts.append( "#amount# #extra.damageType#" );
+		}
+		return { "totalDamage": totalDamage, "parts": parts };
 	}
 
 	/**
 	 * Fire Bolt/Eldritch Blast/Produce Flame-style attack cantrip: a spell
 	 * attack roll (d20 + Proficiency Bonus + spellcasting ability modifier)
 	 * vs. the defender's AC, dealing `diceCount`d`diceSides` damage on a hit
-	 * (doubled on a natural 20).
+	 * (doubled on a natural 20). `extraDamage` (Ice Storm-style same_roll
+	 * extra effects, see _resolveExtraDamage()) share this same hit/miss and
+	 * crit outcome — a miss skips them same as the primary damage.
 	 */
-	private function _castAttackSpell( state, attacker, defender, defenderIsPlayer, spellName, diceCount, diceSides, damageType, resourceNote = "", flatBonus = 0 ) {
+	private function _castAttackSpell( state, attacker, defender, defenderIsPlayer, spellName, diceCount, diceSides, damageType, resourceNote = "", flatBonus = 0, extraDamage = [] ) {
 		var spellMod = arguments.attacker.modifiers[ arguments.attacker.spellcastingAbility ];
 		var cover = coverBonus( arguments.state, arguments.attacker, arguments.defender );
 		var effectiveAC = arguments.defender.armorClass + cover;
@@ -1785,6 +1869,14 @@ class singleton {
 
 		var damage = variables.dice.rollSum( arguments.diceCount * ( isCrit ? 2 : 1 ), arguments.diceSides ) + arguments.flatBonus;
 		damage = applyDamageModifiers( arguments.defender, damage, arguments.damageType );
+		var damageParts = [ "#damage# #arguments.damageType#" ];
+		if ( arguments.extraDamage.len() ) {
+			var extraResult = _resolveExtraDamage( arguments.defender, arguments.extraDamage, isCrit ? 2 : 1 );
+			damage += extraResult.totalDamage;
+			for ( var part in extraResult.parts ) {
+				damageParts.append( part );
+			}
+		}
 
 		arguments.defender.hitPoints = max( 0, arguments.defender.hitPoints - damage );
 		checkConcentration( arguments.state.log, arguments.defender, damage, arguments.state );
@@ -1792,7 +1884,7 @@ class singleton {
 		arguments.state.log.prepend(
 			"#arguments.attacker.name# casts #arguments.spellName##arguments.resourceNote# at #arguments.defender.name#: #roll# + #arguments.attacker.proficiencyBonus + spellMod# = #total# vs AC #effectiveAC##coverNote#. " &
 			( isCrit ? "Critical hit! " : "Hit! " ) &
-			"#damage# #arguments.damageType# damage (#arguments.defender.hitPoints#/#arguments.defender.maxHitPoints# HP)."
+			"#arrayToList( damageParts, ' + ' )# damage (#arguments.defender.hitPoints#/#arguments.defender.maxHitPoints# HP)."
 		);
 		checkDefenderDefeated( arguments.state, arguments.attacker, arguments.defender, arguments.defenderIsPlayer );
 	}
@@ -1803,22 +1895,36 @@ class singleton {
 	 * Bonus + spellcasting ability modifier, taking full damage on a failure
 	 * and — per `saveEffect`, from the spells table's own `save_effect` column
 	 * for a real leveled spell, or "half" for the hardcoded cantrips — either
-	 * half damage or none at all on a success.
+	 * half damage or none at all on a success. `extraDamage` (Ice Storm-style
+	 * same_roll extra effects, see _resolveExtraDamage()) share this same
+	 * save outcome, each independently halved/negated per `saveEffect`.
 	 */
-	private function _castSaveDamageSpell( state, attacker, defender, defenderIsPlayer, spellName, saveAbility, diceCount, diceSides, damageType, saveEffect = "half", resourceNote = "", flatBonus = 0 ) {
+	private function _castSaveDamageSpell( state, attacker, defender, defenderIsPlayer, spellName, saveAbility, diceCount, diceSides, damageType, saveEffect = "half", resourceNote = "", flatBonus = 0, extraDamage = [] ) {
 		var dc = 8 + arguments.attacker.proficiencyBonus + arguments.attacker.modifiers[ arguments.attacker.spellcastingAbility ];
 		var cover = coverBonus( arguments.state, arguments.attacker, arguments.defender );
 		var saveResult = rollSavingThrow( arguments.defender, arguments.saveAbility, dc, "", true, cover, arguments.state );
 
 		var damage = variables.dice.rollSum( arguments.diceCount, arguments.diceSides ) + arguments.flatBonus;
 		var successText = "succeeds. No effect. ";
+		var halveExtras = false;
+		var negateExtras = false;
 		if ( saveResult.success && arguments.saveEffect == "half" ) {
 			damage = int( damage / 2 );
 			successText = "succeeds, takes half damage. ";
+			halveExtras = true;
 		} else if ( saveResult.success ) {
 			damage = 0;
+			negateExtras = true;
 		}
 		damage = applyDamageModifiers( arguments.defender, damage, arguments.damageType );
+		var damageParts = [ "#damage# #arguments.damageType#" ];
+		if ( arguments.extraDamage.len() ) {
+			var extraResult = _resolveExtraDamage( arguments.defender, arguments.extraDamage, 1, halveExtras, negateExtras );
+			damage += extraResult.totalDamage;
+			for ( var part in extraResult.parts ) {
+				damageParts.append( part );
+			}
+		}
 
 		arguments.defender.hitPoints = max( 0, arguments.defender.hitPoints - damage );
 		checkConcentration( arguments.state.log, arguments.defender, damage, arguments.state );
@@ -1827,9 +1933,59 @@ class singleton {
 			"#arguments.attacker.name# casts #arguments.spellName##arguments.resourceNote# at #arguments.defender.name#: DC #dc# #uCase( arguments.saveAbility )# save — #arguments.defender.name# rolls #saveResult.total#" &
 			( saveResult.hadAdvantage ? " (Advantage)" : "" ) & " — " &
 			( saveResult.success ? successText : "fails! " ) &
-			"#damage# #arguments.damageType# damage (#arguments.defender.hitPoints#/#arguments.defender.maxHitPoints# HP)."
+			"#arrayToList( damageParts, ' + ' )# damage (#arguments.defender.hitPoints#/#arguments.defender.maxHitPoints# HP)."
 		);
 		checkDefenderDefeated( arguments.state, arguments.attacker, arguments.defender, arguments.defenderIsPlayer );
+	}
+
+	/**
+	 * Resolves a "separate_roll" extra effect (see
+	 * SpellcastingService._loadExtraEffects()) — its own saving throw against
+	 * its own target(s): the primary `primaryDefender` plus any other living
+	 * combatant on the same side within `effect.aoeRadiusSquares` of the
+	 * primary defender's position (e.g. Ice Knife: "the target and each
+	 * creature within 5 feet of it"). Fires unconditionally regardless of
+	 * whether the primary effect (the attack roll or save) hit/succeeded,
+	 * per Ice Knife's "Hit or miss, the shard then explodes." Save-only for
+	 * now — no known spell needs a chained *attack* roll (see effect.effectType).
+	 */
+	private function _castChainedSpellEffect( state, attacker, primaryDefender, defenderIsPlayer, spellName, effect, resourceNote ) {
+		var candidates = arguments.defenderIsPlayer ? arguments.state.players : stateOpponents( arguments.state );
+		var targets = [];
+		for ( var c in candidates ) {
+			if (
+				c.hitPoints > 0 &&
+				( c.name == arguments.primaryDefender.name || variables.grid.chebyshev( arguments.primaryDefender, c ) <= arguments.effect.aoeRadiusSquares )
+			) {
+				targets.append( c );
+			}
+		}
+		if ( !targets.len() ) {
+			return;
+		}
+
+		var dc = 8 + arguments.attacker.proficiencyBonus + arguments.attacker.modifiers[ arguments.attacker.spellcastingAbility ];
+		var notes = [];
+		for ( var target in targets ) {
+			var cover = coverBonus( arguments.state, arguments.attacker, target );
+			var saveResult = rollSavingThrow( target, arguments.effect.saveAbility, dc, "", true, cover, arguments.state );
+			var damage = variables.dice.rollSum( arguments.effect.diceCount, arguments.effect.diceSides )
+				+ ( arguments.effect.extraDiceCount > 0 ? variables.dice.rollSum( arguments.effect.extraDiceCount, arguments.effect.extraDiceSides ) : 0 );
+			if ( saveResult.success && arguments.effect.saveEffect == "half" ) {
+				damage = int( damage / 2 );
+			} else if ( saveResult.success ) {
+				damage = 0;
+			}
+			damage = applyDamageModifiers( target, damage, arguments.effect.damageType );
+			target.hitPoints = max( 0, target.hitPoints - damage );
+			checkConcentration( arguments.state.log, target, damage, arguments.state );
+			recordThreat( target, arguments.attacker, damage );
+			notes.append( "#target.name# #( saveResult.success ? 'saves' : 'fails' )# (#damage# #arguments.effect.damageType#, #target.hitPoints#/#target.maxHitPoints# HP)" );
+			checkDefenderDefeated( arguments.state, arguments.attacker, target, arguments.defenderIsPlayer );
+		}
+		arguments.state.log.prepend(
+			"#arguments.attacker.name#'s #arguments.spellName##arguments.resourceNote# explodes: DC #dc# #uCase( arguments.effect.saveAbility )# save — #arrayToList( notes, '; ' )#."
+		);
 	}
 
 	/**
@@ -1853,14 +2009,19 @@ class singleton {
 	/**
 	 * Cure Wounds/Healing Word-style heal: heals `target` (the caster
 	 * themself, an ally, or — for a monster's own self-heal — itself, see
-	 * _runOneOpponentTurn()) for `diceCount`d`diceSides` plus the caster's
-	 * spellcasting ability modifier Hit Points, capped at `target`'s
-	 * maximum. Healing a downed (0 HP) target back above 0 revives them —
-	 * clears the dying/stable state and death save counters, same as a
-	 * natural 20 on rollDeathSave().
+	 * _runOneOpponentTurn()) for `diceCount`d`diceSides` — plus
+	 * `extraDiceCount`d`extraDiceSides` if the spell was upcast into a
+	 * higher-level slot and has upcast dice modeled (see
+	 * castLeveledSpellFor()) — plus the caster's spellcasting ability
+	 * modifier Hit Points, capped at `target`'s maximum. Healing a downed
+	 * (0 HP) target back above 0 revives them — clears the dying/stable
+	 * state and death save counters, same as a natural 20 on
+	 * rollDeathSave().
 	 */
-	private function _castHealSpell( state, attacker, target, spellName, resourceNote, diceCount, diceSides ) {
-		var healing = variables.dice.rollSum( arguments.diceCount, arguments.diceSides ) + arguments.attacker.modifiers[ arguments.attacker.spellcastingAbility ];
+	private function _castHealSpell( state, attacker, target, spellName, resourceNote, diceCount, diceSides, extraDiceCount = 0, extraDiceSides = 0 ) {
+		var healing = variables.dice.rollSum( arguments.diceCount, arguments.diceSides )
+			+ ( arguments.extraDiceCount > 0 ? variables.dice.rollSum( arguments.extraDiceCount, arguments.extraDiceSides ) : 0 )
+			+ arguments.attacker.modifiers[ arguments.attacker.spellcastingAbility ];
 		var wasDown = arguments.target.hitPoints <= 0;
 		arguments.target.hitPoints = min( arguments.target.maxHitPoints, arguments.target.hitPoints + healing );
 		if ( wasDown && arguments.target.hitPoints > 0 ) {
@@ -1874,6 +2035,42 @@ class singleton {
 			selfCast
 				? "#arguments.attacker.name# casts #arguments.spellName##arguments.resourceNote#, healing #healing# Hit Points (#arguments.target.hitPoints#/#arguments.target.maxHitPoints# HP)."
 				: "#arguments.attacker.name# casts #arguments.spellName##arguments.resourceNote# on #arguments.target.name#, healing #healing# Hit Points (#arguments.target.hitPoints#/#arguments.target.maxHitPoints# HP)."
+		);
+	}
+
+	/**
+	 * Mass Healing Word-style heal: unlike _castHealSpell()'s single chosen
+	 * target, heals every party member (including the caster) within
+	 * `radiusSquares` of `attacker` — each independently rolls its own
+	 * `diceCount`d`diceSides` (plus `extraDiceCount`d`extraDiceSides` if
+	 * upcast, see castLeveledSpellFor()) plus the caster's spellcasting
+	 * ability modifier, same as a single-target heal. Reviving a downed
+	 * (0 HP) member back above 0 clears their dying/stable state, same as
+	 * _castHealSpell().
+	 */
+	private function _castMassHealSpell( state, attacker, spellName, resourceNote, diceCount, diceSides, radiusSquares, extraDiceCount = 0, extraDiceSides = 0 ) {
+		var healedNotes = [];
+		for ( var member in arguments.state.players ) {
+			if ( variables.grid.chebyshev( arguments.attacker, member ) > arguments.radiusSquares ) {
+				continue;
+			}
+			var healing = variables.dice.rollSum( arguments.diceCount, arguments.diceSides )
+				+ ( arguments.extraDiceCount > 0 ? variables.dice.rollSum( arguments.extraDiceCount, arguments.extraDiceSides ) : 0 )
+				+ arguments.attacker.modifiers[ arguments.attacker.spellcastingAbility ];
+			var wasDown = member.hitPoints <= 0;
+			member.hitPoints = min( member.maxHitPoints, member.hitPoints + healing );
+			if ( wasDown && member.hitPoints > 0 ) {
+				member.isDying = false;
+				member.isStable = false;
+				member.deathSaveSuccesses = 0;
+				member.deathSaveFailures = 0;
+			}
+			healedNotes.append( "#member.name# +#healing# (#member.hitPoints#/#member.maxHitPoints# HP)" );
+		}
+		arguments.state.log.prepend(
+			healedNotes.len()
+				? "#arguments.attacker.name# casts #arguments.spellName##arguments.resourceNote#: #arrayToList( healedNotes, ', ' )#."
+				: "#arguments.attacker.name# casts #arguments.spellName##arguments.resourceNote#, but no one is within range."
 		);
 	}
 
