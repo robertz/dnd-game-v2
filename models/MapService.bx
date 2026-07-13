@@ -752,8 +752,8 @@ class singleton {
 	 * request for the lifetime of an encounter — without caching, a map
 	 * with a large POI count (e.g.
 	 * many opponent spawn points) re-queries and re-deserializes all of
-	 * them on every single move/attack/auto-battle tick, even though only
-	 * loot/transition types are ever re-read after map entry.
+	 * them on every single move/attack, even though only loot/transition
+	 * types are ever re-read after map entry.
 	 */
 	private function _loadPois( mapId ) {
 		_ensureCaches();

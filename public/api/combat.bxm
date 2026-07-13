@@ -113,14 +113,11 @@
 		"actionUsed"            : false,
 		"bonusActionUsed"       : false,
 		"attacksUsedThisTurn"   : 0,
-		"roundHadAction"        : false,
-		"staleAutoRounds"       : 0,
 		"gameOver"              : false,
 		"outcome"               : "",
 		"log"                   : [ "You enter the dungeon. Move toward the enemies to begin combat." ],
 		"initiativeRolled"      : false,
 		"selectedOpponentIndex" : 1,
-		"autoBattling"          : false,
 		"stateSaved"            : false,
 		"restDiceCount"         : 1,
 		"asiMode"               : "single",
@@ -175,7 +172,6 @@
 		"initiativeRolled"      : state.initiativeRolled,
 		"selectedOpponentIndex" : state.selectedOpponentIndex,
 		"items"                 : state.items,
-		"autoBattling"          : state.autoBattling,
 		"gridPois"              : state.gridPois
 	} ) );
 </bx:script>

@@ -78,28 +78,10 @@ class singleton {
 	}
 
 	/**
-	 * Whether every living party member has spent their action economy this
-	 * round — used in place of a single-player exhaustion check to decide
-	 * when the party's turn can auto-end. For a solo party this reduces to
-	 * exactly the same check as before multi-character support existed.
-	 *
-	 * @state The encounter's full mutable game state struct.
-	 */
-	function allPlayersExhausted( state ) {
-		for ( var i = 1; i <= arguments.state.players.len(); i++ ) {
-			if ( memberHasActionsLeft( arguments.state, i ) ) {
-				return false;
-			}
-		}
-		return true;
-	}
-
-	/**
 	 * Resets everything that recharges at the top of a new round for every
 	 * living party member: movement and Action/Bonus Action/Reaction economy,
 	 * plus every living combatant's Reaction (used for opportunity attacks —
-	 * see checkOpportunityAttacks()). Shared by endPlayerTurn() and the wire
-	 * component's auto-battle loop so the reset logic only lives in one place.
+	 * see checkOpportunityAttacks()).
 	 *
 	 * @state The encounter's full mutable game state struct.
 	 */
@@ -136,12 +118,6 @@ class singleton {
 		arguments.state.actionUsed          = active.actionUsed;
 		arguments.state.bonusActionUsed     = active.bonusActionUsed;
 		arguments.state.attacksUsedThisTurn = active.attacksUsedThisTurn;
-		// Whether either side actually attacked/cast this round — see
-		// autoStep()'s stalemate check, which stops auto-battle rather than
-		// polling forever when neither combatant can reach the other (e.g. a
-		// monster stranded in water, or a maze pocket the player can't path
-		// out of).
-		arguments.state.roundHadAction = false;
 		for ( var opponent in stateOpponents( arguments.state ) ) {
 			opponent.reactionUsed = false;
 			opponent.speedPenalty = 0;
@@ -299,30 +275,6 @@ class singleton {
 			}
 		}
 		return true;
-	}
-
-	/**
-	 * Picks the closest living opponent to the player (Chebyshev distance) —
-	 * used by the auto-battle player AI to decide who to chase/attack. Falls
-	 * back to whatever's already in `state.opponent` if every opponent is
-	 * somehow already down (shouldn't happen — the encounter should already
-	 * be over by then).
-	 */
-	function nearestLivingOpponent( state ) {
-		var player = arguments.state.player;
-		var nearest = javaCast( "null", 0 );
-		var nearestDistance = 0;
-		for ( var o in stateOpponents( arguments.state ) ) {
-			if ( o.hitPoints <= 0 ) {
-				continue;
-			}
-			var d = variables.grid.chebyshev( player, o );
-			if ( isNull( nearest ) || d < nearestDistance ) {
-				nearest = o;
-				nearestDistance = d;
-			}
-		}
-		return isNull( nearest ) ? arguments.state.opponent : nearest;
 	}
 
 	/**
@@ -1726,7 +1678,6 @@ class singleton {
 		}
 
 		arguments.state.actionUsed = true;
-		arguments.state.roundHadAction = true;
 		// Dice default to 1d8 (save) / 1d10 (attack), matching the classes'
 		// cantrips — but a monster's own signature cantrip (e.g. a Priest's
 		// Radiant Flame, 2d6) can override with its own diceCount/diceSides.
@@ -1790,7 +1741,6 @@ class singleton {
 		}
 
 		arguments.state.actionUsed = true;
-		arguments.state.roundHadAction = true;
 		if ( arguments.spell.keyExists( "concentration" ) && arguments.spell.concentration ) {
 			_startConcentrating( arguments.state, arguments.attacker, arguments.spell.name );
 		}
@@ -2231,8 +2181,7 @@ class singleton {
 	/**
 	 * Resolves the player's attack against the opponent and, on a kill, ends
 	 * the encounter and awards the opponent's XP to the player's saved
-	 * character. Shared by the manual Attack action and the auto-battle
-	 * player turn, so victory/XP handling only lives in one place.
+	 * character.
 	 *
 	 * @state The encounter's full mutable game state struct.
 	 * @weapon The weapon item being used for this attack.

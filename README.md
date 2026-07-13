@@ -12,8 +12,8 @@ no frontend build step.
 - **Character sheet** — ability scores, saving throws, skills, feats, features,
   inventory (weapons/armor/items), and spell management.
 - **Turn-based combat** — grid-based movement and line-of-sight, attacks,
-  spellcasting, rage, smite, breath weapons, short/long rests, death saves,
-  and an auto-battle mode — synced live over a WebSocket per encounter.
+  spellcasting, rage, smite, breath weapons, short/long rests, and death
+  saves — synced live over a WebSocket per encounter.
 - **Map editor** — paint tile-based dungeon/outdoor maps, place spawn points,
   loot, and transitions between maps/modules.
 - **Accounts** — username/password login (PBKDF2-hashed, no third-party auth),
@@ -49,7 +49,7 @@ models/                  BoxLang service classes (business logic + SQL)
     ProgressionService.bx    XP/level-ups, ASI, feats, multiclassing
     CharacterStateService.bx Character load/save, short/long rests
     CombatActionsService.bx  Attack resolution, action economy, conditions
-    EnemyAIService.bx        Enemy turns, aggro, legendary actions, auto-battle
+    EnemyAIService.bx        Enemy turns, aggro, legendary actions
 
 public/
   Application.bx           App-level config (session, datasource, cache-busting)

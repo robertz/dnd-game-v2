@@ -307,7 +307,6 @@ const gameState = reactive( {
 	log:                   [],
 	initiativeRolled:      false,
 	selectedOpponentIndex: 1,
-	autoBattling:          false,
 	gridPois:              [],
 	asiMode:               "single",
 	asiAbility1:           "str",

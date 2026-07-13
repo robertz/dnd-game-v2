@@ -89,9 +89,6 @@ const CombatEncounter = {
 						</template>
 					</div>
 
-					<div v-if="cs.outcome === 'victory'" class="turn-actions">
-						<button type="button" class="btn btn-attack" @click="ws('continue_exploring')">Continue Exploring</button>
-					</div>
 				</template>
 
 				<!-- Combat status -->
@@ -133,69 +130,61 @@ const CombatEncounter = {
 
 				<!-- Action bar -->
 				<div v-if="!cs.gameOver && cs.initiativeRolled" class="turn-actions action-bar">
-					<template v-if="cs.autoBattling">
-						<div class="action-group">
-							<div class="auto-battle-indicator">⚔ Auto-battling…</div>
-							<button type="button" class="btn btn-end-turn" @click="stopAutoBattle()">Stop</button>
-						</div>
-					</template>
-					<template v-else>
-						<template v-if="cs.currentTurn === 'player'">
-							<template v-if="cs.player.isDying">
-								<div class="action-group">
-									<button type="button" class="btn btn-attack" @click="ws('death_save')">Make Death Saving Throw</button>
-								</div>
-							</template>
-							<template v-else-if="cs.player.hitPoints <= 0">
-								<p class="encounter-intro">{{ cs.player.name }} is stabilized but unconscious.</p>
-								<div class="action-bar-end">
-									<button type="button" class="btn btn-end-turn" @click="ws('end_turn')">{{ partyMembers.length > 1 ? 'End Party Turn' : 'End Turn' }}</button>
-								</div>
-							</template>
-							<template v-else>
-								<div v-if="hasActionOptions" class="action-group">
-									<span class="action-group-label">Action</span>
-									<template v-if="remainingAttacks > 0 && (!cs.actionUsed || cs.attacksUsedThisTurn > 0)">
-										<button type="button" class="btn btn-attack" @click="ws('attack')">Attack{{ remainingAttacks > 1 ? ' (' + remainingAttacks + ' left)' : '' }}</button>
-										<template v-if="playerHasFeature(\`Paladin's Smite\`) && cs.player.spellSlots">
-											<button v-for="(count, level) in cs.player.spellSlots" :key="'smite'+level" v-show="count > 0"
-												type="button" class="btn btn-attack" @click="ws('smite',{slotLevel:level})">Smite (Lv {{ level }})</button>
-										</template>
+					<template v-if="cs.currentTurn === 'player'">
+						<template v-if="cs.player.isDying">
+							<div class="action-group">
+								<button type="button" class="btn btn-attack" @click="ws('death_save')">Make Death Saving Throw</button>
+							</div>
+						</template>
+						<template v-else-if="cs.player.hitPoints <= 0">
+							<p class="encounter-intro">{{ cs.player.name }} is stabilized but unconscious.</p>
+							<div class="action-bar-end">
+								<button type="button" class="btn btn-end-turn" @click="ws('end_turn')">{{ partyMembers.length > 1 ? 'End Party Turn' : 'End Turn' }}</button>
+							</div>
+						</template>
+						<template v-else>
+							<div v-if="hasActionOptions" class="action-group">
+								<span class="action-group-label">Action</span>
+								<template v-if="remainingAttacks > 0 && (!cs.actionUsed || cs.attacksUsedThisTurn > 0)">
+									<button type="button" class="btn btn-attack" @click="ws('attack')">Attack{{ remainingAttacks > 1 ? ' (' + remainingAttacks + ' left)' : '' }}</button>
+									<template v-if="playerHasFeature(\`Paladin's Smite\`) && cs.player.spellSlots">
+										<button v-for="(count, level) in cs.player.spellSlots" :key="'smite'+level" v-show="count > 0"
+											type="button" class="btn btn-attack" @click="ws('smite',{slotLevel:level})">Smite (Lv {{ level }})</button>
 									</template>
-									<template v-if="!cs.actionUsed">
-										<button v-if="cs.player.hasGrapplerFeat" type="button" class="btn btn-attack" @click="ws('grapple')">Grapple</button>
-										<button type="button" class="btn btn-attack" @click="ws('shove')">Shove</button>
-										<button v-if="cs.player.hasBreathWeapon && !cs.player.usedBreathWeapon" type="button" class="btn btn-attack" @click="ws('breath_weapon')">Breath Weapon</button>
-										<template v-if="cs.player.knownCantrips">
-											<button v-for="cantrip in cs.player.knownCantrips" :key="cantrip.name"
-												type="button" class="btn btn-attack"
-												:title="describeSpell(cantrip)"
-												@click="ws('cast_cantrip',{spellName:cantrip.name})">Cast {{ cantrip.name }} (Cantrip)</button>
-										</template>
-										<template v-if="cs.player.knownLeveledSpells">
-											<button v-for="spell in cs.player.knownLeveledSpells" :key="spell.name"
-												type="button" class="btn btn-attack"
-												:disabled="!hasSpellResource(spell.level)"
-												:title="describeSpell(spell)"
-												@click="castLeveledSpell(spell)">Cast {{ spell.name }} (Lv {{ spell.level }}){{ spell.type === 'heal' && partyMembers.length > 1 ? ' on ' + healTargetName : '' }}</button>
-										</template>
+								</template>
+								<template v-if="!cs.actionUsed">
+									<button v-if="cs.player.hasGrapplerFeat" type="button" class="btn btn-attack" @click="ws('grapple')">Grapple</button>
+									<button type="button" class="btn btn-attack" @click="ws('shove')">Shove</button>
+									<button v-if="cs.player.hasBreathWeapon && !cs.player.usedBreathWeapon" type="button" class="btn btn-attack" @click="ws('breath_weapon')">Breath Weapon</button>
+									<template v-if="cs.player.knownCantrips">
+										<button v-for="cantrip in cs.player.knownCantrips" :key="cantrip.name"
+											type="button" class="btn btn-attack"
+											:title="describeSpell(cantrip)"
+											@click="ws('cast_cantrip',{spellName:cantrip.name})">Cast {{ cantrip.name }} (Cantrip)</button>
 									</template>
-								</div>
+									<template v-if="cs.player.knownLeveledSpells">
+										<button v-for="spell in cs.player.knownLeveledSpells" :key="spell.name"
+											type="button" class="btn btn-attack"
+											:disabled="!hasSpellResource(spell.level)"
+											:title="describeSpell(spell)"
+											@click="castLeveledSpell(spell)">Cast {{ spell.name }} (Lv {{ spell.level }}){{ spell.type === 'heal' && partyMembers.length > 1 ? ' on ' + healTargetName : '' }}</button>
+									</template>
+								</template>
+							</div>
 
-								<div v-if="hasBonusOptions" class="action-group">
-									<span class="action-group-label">Bonus</span>
-									<button v-if="canOffHandAttack" type="button" class="btn btn-attack" @click="ws('off_hand_attack')">Off-Hand Attack</button>
-									<template v-if="!cs.bonusActionUsed">
-										<button v-if="playerHasFeature('Second Wind') && !cs.player.usedSecondWind" type="button" class="btn btn-attack" @click="ws('second_wind')">Second Wind</button>
-										<button v-if="playerHasFeature('Rage') && !cs.player.isRaging && cs.player.ragesRemaining > 0" type="button" class="btn btn-attack" @click="ws('start_rage')">Rage ({{ cs.player.ragesRemaining }} left)</button>
-									</template>
-									<button v-if="cs.player.isRaging" type="button" class="btn btn-attack" @click="ws('end_rage')">End Rage</button>
-								</div>
+							<div v-if="hasBonusOptions" class="action-group">
+								<span class="action-group-label">Bonus</span>
+								<button v-if="canOffHandAttack" type="button" class="btn btn-attack" @click="ws('off_hand_attack')">Off-Hand Attack</button>
+								<template v-if="!cs.bonusActionUsed">
+									<button v-if="playerHasFeature('Second Wind') && !cs.player.usedSecondWind" type="button" class="btn btn-attack" @click="ws('second_wind')">Second Wind</button>
+									<button v-if="playerHasFeature('Rage') && !cs.player.isRaging && cs.player.ragesRemaining > 0" type="button" class="btn btn-attack" @click="ws('start_rage')">Rage ({{ cs.player.ragesRemaining }} left)</button>
+								</template>
+								<button v-if="cs.player.isRaging" type="button" class="btn btn-attack" @click="ws('end_rage')">End Rage</button>
+							</div>
 
-								<div class="action-bar-end">
-									<button type="button" class="btn btn-end-turn" @click="ws('end_turn')">{{ partyMembers.length > 1 ? 'End Party Turn' : 'End Turn' }}</button>
-								</div>
-							</template>
+							<div class="action-bar-end">
+								<button type="button" class="btn btn-end-turn" @click="ws('end_turn')">{{ partyMembers.length > 1 ? 'End Party Turn' : 'End Turn' }}</button>
+							</div>
 						</template>
 					</template>
 				</div>
@@ -262,7 +251,7 @@ const CombatEncounter = {
 								<li v-for="item in cs.items" :key="item.id">
 									{{ item.itemName }} <span class="attack-stat">x{{ item.quantity }}</span>
 									<button v-if="itemIsUsable(item.itemName)" type="button" class="btn btn-attack"
-										:disabled="cs.gameOver || cs.autoBattling || member.hitPoints <= 0 || (cs.initiativeRolled && (cs.currentTurn !== 'player' || cs.actionUsed))"
+										:disabled="cs.gameOver || member.hitPoints <= 0 || (cs.initiativeRolled && (cs.currentTurn !== 'player' || cs.actionUsed))"
 										@click.stop="ws('use_item',{inventoryId:item.id})"
 									>Use</button>
 								</li>
@@ -314,7 +303,6 @@ const CombatEncounter = {
 		const asiSelectedFeat = ref( "" );
 		const asiSelectedSkills = ref( [] );
 		const restDiceCount   = ref( 1 );
-		let autoBattleInterval = null;
 
 		const abilityAbbrs = ["str","dex","con","int","wis","cha"];
 		const ALL_SKILLS = [
@@ -381,7 +369,6 @@ const CombatEncounter = {
 		} );
 
 		onUnmounted( () => {
-			stopAutoBattle();
 			socket.removeEventListener( "message", onSocketMessage );
 		} );
 
@@ -423,12 +410,16 @@ const CombatEncounter = {
 				initiativeRolled:      data.initiativeRolled      ?? cs.initiativeRolled,
 				selectedOpponentIndex: data.selectedOpponentIndex ?? cs.selectedOpponentIndex,
 				items:                 data.items                 ?? cs.items,
-				autoBattling:          data.autoBattling          ?? cs.autoBattling,
 				gridPois:              data.gridPois              ?? cs.gridPois
 			} );
 			// Broadcasts carry POIs only as gridPois; the initial /api/combat.bxm
 			// response also sends them as mapPois but the two are identical.
 			if ( data.gridPois ) mapPois.value = data.gridPois;
+			// Auto-clear a victory once any ASI/feat reward has been resolved,
+			// since there's no longer a button for the player to do this manually.
+			if ( cs.outcome === "victory" && !cs.player.pendingAbilityScoreImprovements ) {
+				ws( "continue_exploring" );
+			}
 		}
 
 		function ws( type, extra = {} ) {
@@ -438,27 +429,6 @@ const CombatEncounter = {
 		function selectActiveCharacter( playerIndex ) {
 			if ( cs.gameOver || cs.currentTurn !== "player" || playerIndex === cs.activePlayerIndex ) return;
 			ws( "select_active_character", { playerIndex } );
-		}
-
-		function startAutoBattle() {
-			if ( cs.gameOver || !cs.initiativeRolled ) return;
-			cs.autoBattling = true;
-			autoBattleInterval = setInterval( () => {
-				if ( cs.gameOver || !cs.autoBattling ) {
-					stopAutoBattle();
-					return;
-				}
-				ws( "auto_step" );
-			}, 900 );
-		}
-
-		function stopAutoBattle() {
-			cs.autoBattling = false;
-			if ( autoBattleInterval ) {
-				clearInterval( autoBattleInterval );
-				autoBattleInterval = null;
-			}
-			ws( "auto_step" ); // tell server autoBattling = false (noop if already stopped)
 		}
 
 		function confirmAsi() {
@@ -536,7 +506,7 @@ const CombatEncounter = {
 
 		const reachableSet = Vue.computed( () => {
 			const p = cs.player;
-			if ( !p || !p.position || cs.gameOver || cs.autoBattling || cs.currentTurn !== "player" || p.hitPoints <= 0 || !mapLoaded.value ) return {};
+			if ( !p || !p.position || cs.gameOver || cs.currentTurn !== "player" || p.hitPoints <= 0 || !mapLoaded.value ) return {};
 			return computeReachable( p.position.x, p.position.y, cs.movementRemaining );
 		} );
 
@@ -698,7 +668,7 @@ const CombatEncounter = {
 		}
 
 		function tileClick( x, y ) {
-			if ( cs.gameOver || cs.autoBattling || cs.currentTurn !== "player" ) return;
+			if ( cs.gameOver || cs.currentTurn !== "player" ) return;
 			const allyIndex = partyIndexAt( x, y );
 			if ( allyIndex && allyIndex !== cs.activePlayerIndex ) {
 				selectActiveCharacter( allyIndex );
@@ -858,7 +828,7 @@ const CombatEncounter = {
 			tileClass, tileTitle, tileEmoji, tileClick, selectActiveCharacter,
 			playerHasFeature, hasSpellResource, itemIsUsable, describeSpell,
 			healTargetIndex, isHealTarget, healTargetName, castLeveledSpell, partyColorClass,
-			ws, startAutoBattle, stopAutoBattle, confirmAsi, confirmFeat, toggleAsiSkill
+			ws, confirmAsi, confirmFeat, toggleAsiSkill
 		};
 	}
 };

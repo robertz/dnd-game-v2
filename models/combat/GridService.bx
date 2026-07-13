@@ -572,9 +572,9 @@ class singleton {
 	/**
 	 * Returns the encounter's level grid — `state.grid` if present, falling
 	 * back to `state.map` (the key the WebSocket handler's real encounter
-	 * state uses), or null otherwise — lets playerDecideAndAct()/
-	 * runEnemyTurn() pass a grid through to moveToward() without breaking
-	 * callers (like the unit tests) whose state has no map.
+	 * state uses), or null otherwise — lets runEnemyTurn() pass a grid
+	 * through to moveToward() without breaking callers (like the unit
+	 * tests) whose state has no map.
 	 */
 	function stateGrid( state ) {
 		if ( structKeyExists( arguments.state, "grid" ) ) {

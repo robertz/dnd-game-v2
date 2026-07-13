@@ -1,7 +1,7 @@
 /**
  * Encounter AI and round orchestration: the enemy phase (per-opponent
- * turns, aggro/threat targeting, legendary actions), the auto-battle
- * player brain, initiative, and the player-to-enemy turn handoff.
+ * turns, aggro/threat targeting, legendary actions), initiative, and the
+ * player-to-enemy turn handoff.
  * Depends on Grid, CombatActions, Dice, and Progression.
  */
 class singleton {
@@ -28,125 +28,6 @@ class singleton {
 			return 0;
 		}
 		return variables.grid.stepAlongDistanceField( argumentCollection = arguments );
-	}
-
-	/**
-	 * Decides and performs the player's action for one turn: move toward the
-	 * opponent if not adjacent (preferring melee — better damage, no
-	 * Disadvantage), then either casts a spell (see _autoCastPlayerSpell())
-	 * or attacks with whatever's in range once movement settles. Does not
-	 * advance to the enemy's turn — callers do that separately once they're
-	 * done acting.
-	 *
-	 * @state The encounter's full mutable game state struct.
-	 */
-	function playerDecideAndAct( state ) {
-		var player = arguments.state.player;
-		if ( !structKeyExists( arguments.state, "attacksUsedThisTurn" ) ) {
-			arguments.state.attacksUsedThisTurn = 0;
-		}
-		var totalAttacks = variables.actions.attacksPerTurn( player );
-
-		while ( arguments.state.attacksUsedThisTurn < totalAttacks && !arguments.state.gameOver ) {
-			arguments.state.opponent = variables.actions.nearestLivingOpponent( arguments.state );
-			if ( isNull( arguments.state.opponent ) ) {
-				return;
-			}
-			var opponent = arguments.state.opponent;
-			var distance = variables.grid.chebyshev( player, opponent );
-
-			if ( distance > 1 ) {
-				var startPosition = { "x": player.position.x, "y": player.position.y };
-				var steps = _guardedMoveToward(
-					player, opponent, arguments.state.movementRemaining, variables.grid.stateGrid( arguments.state ),
-					variables.actions.otherLivingPositions( arguments.state, player, opponent )
-				);
-				if ( steps > 0 ) {
-					arguments.state.movementRemaining -= steps;
-					arguments.state.log.prepend( "#player.name# advances toward #opponent.name#." );
-					variables.actions.checkOpportunityAttacks( arguments.state, player, true, startPosition );
-					if ( arguments.state.gameOver ) {
-						return;
-					}
-				}
-				distance = variables.grid.chebyshev( player, opponent );
-			}
-
-			// A spell replaces the whole Attack action, not one swing of it —
-			// only worth considering on the turn's first action, before any
-			// Extra Attack swings have already committed to a weapon, and only
-			// when the player isn't already standing next to a foe with a melee
-			// weapon ready (adjacent + melee = weapon attack wins).
-			var hasMeleeWeapon = !isNull( variables.actions.equippedWeapon( player, "melee" ) );
-			var bloodied = player.hitPoints <= player.maxHitPoints / 2;
-			if ( arguments.state.attacksUsedThisTurn == 0 && ( distance > 1 || !hasMeleeWeapon || bloodied ) && _autoCastPlayerSpell( arguments.state, opponent ) ) {
-				return;
-			}
-
-			var choice = variables.actions.pickWeaponForDistance( player, distance, variables.grid.stateGrid( arguments.state ), opponent.position );
-			if ( isNull( choice ) ) {
-				arguments.state.log.prepend( "#player.name# can't reach #opponent.name# this turn." );
-				return;
-			}
-
-			arguments.state.attacksUsedThisTurn += 1;
-			arguments.state.actionUsed = true;
-			arguments.state.roundHadAction = true;
-			variables.actions.playerAttack( arguments.state, choice.weapon, choice.disadvantage );
-		}
-	}
-
-	/**
-	 * Auto-battle's spellcasting decision for the player — mirrors
-	 * `_runOneOpponentTurn()`'s own priority exactly, so a caster fights as
-	 * intelligently under auto-battle as an enemy spellcaster already does:
-	 * a known heal spell while bloodied (50% HP or less), else a known
-	 * damage/save spell with a slot available and a clear shot at
-	 * `opponent`, else a known cantrip with a clear shot. Returns true (and
-	 * has already cast) the first time one of these applies — auto-battle
-	 * doesn't hold slots in reserve for a tougher fight later, same as the
-	 * enemy AI. False if nothing applied, so the caller falls back to a
-	 * mundane weapon attack.
-	 */
-	private function _autoCastPlayerSpell( state, opponent ) {
-		var player = arguments.state.player;
-		if ( structKeyExists( player, "knownLeveledSpells" ) && player.hitPoints <= player.maxHitPoints / 2 ) {
-			for ( var spell in player.knownLeveledSpells ) {
-				if ( spell.type == "heal" && variables.actions.hasSpellResource( player, spell.level ) ) {
-					variables.actions.castLeveledSpell( arguments.state, spell.name );
-					if ( arguments.state.actionUsed ) {
-						return true;
-					}
-				}
-			}
-		}
-
-		if ( structKeyExists( player, "knownLeveledSpells" ) ) {
-			for ( var spell in player.knownLeveledSpells ) {
-				if (
-					( spell.type == "attack" || spell.type == "save" || spell.type == "damage" ) && variables.actions.hasSpellResource( player, spell.level ) &&
-					variables.actions.isSpellTargetValid( arguments.state, player, arguments.opponent, spell )
-				) {
-					variables.actions.castLeveledSpell( arguments.state, spell.name );
-					if ( arguments.state.actionUsed ) {
-						return true;
-					}
-				}
-			}
-		}
-
-		if ( structKeyExists( player, "knownCantrips" ) ) {
-			for ( var cantrip in player.knownCantrips ) {
-				if ( variables.actions.isSpellTargetValid( arguments.state, player, arguments.opponent, cantrip ) ) {
-					variables.actions.castCantrip( arguments.state, cantrip.name );
-					if ( arguments.state.actionUsed ) {
-						return true;
-					}
-				}
-			}
-		}
-
-		return false;
 	}
 
 	/**
@@ -446,7 +327,6 @@ class singleton {
 			}
 			var packAdvantage = _hasPackTacticsAdvantage( arguments.state, arguments.opponent, player );
 			variables.actions.resolveAttack( arguments.state.log, arguments.opponent, player, choice.weapon, choice.disadvantage, packAdvantage, false, variables.actions.coverBonus( arguments.state, arguments.opponent, player ), arguments.state );
-			arguments.state.roundHadAction = true;
 			variables.actions.checkDefenderDefeated( arguments.state, arguments.opponent, player, true );
 		}
 	}
@@ -481,7 +361,6 @@ class singleton {
 		var special = arguments.opponent.specialAttack;
 		arguments.opponent.usedSpecialAttack = true;
 		arguments.state.actionUsed = true;
-		arguments.state.roundHadAction = true;
 
 		var saveResult = variables.actions.rollSavingThrow( combatant = arguments.player, ability = special.saveAbility, dc = special.saveDC, state = arguments.state );
 		var damage = variables.dice.rollSum( special.diceCount, special.diceSides ) + special.damageBonus;

@@ -19,8 +19,8 @@
  *   CharacterStateService — loadCharacter/saveCharacterState, rests
  *   CombatActionsService  — attack/damage resolution, action economy,
  *                           conditions, saves, in-combat casting, death saves
- *   EnemyAIService        — enemy phase, aggro, legendary actions, the
- *                           auto-battle brain, initiative, turn handoff
+ *   EnemyAIService        — enemy phase, aggro, legendary actions,
+ *                           initiative, turn handoff
  *
  * Everything stays stateless: per-encounter data lives in the mutable `state`
  * struct callers pass in, mutated in place.
@@ -135,7 +135,6 @@ class singleton {
 	function switchActivePlayer( state, newIndex ) { return variables.actions.switchActivePlayer( argumentCollection = arguments ); }
 	function initMemberEconomy( member ) { return variables.actions.initMemberEconomy( argumentCollection = arguments ); }
 	function memberHasActionsLeft( state, idx ) { return variables.actions.memberHasActionsLeft( argumentCollection = arguments ); }
-	function allPlayersExhausted( state ) { return variables.actions.allPlayersExhausted( argumentCollection = arguments ); }
 	function startNewRound( state ) { return variables.actions.startNewRound( argumentCollection = arguments ); }
 	function attacksPerTurn( combatant ) { return variables.actions.attacksPerTurn( argumentCollection = arguments ); }
 	function checkOpportunityAttacks( state, mover, moverIsPlayer, startPosition ) { return variables.actions.checkOpportunityAttacks( argumentCollection = arguments ); }
@@ -164,7 +163,6 @@ class singleton {
 	function rollInitiative( combatant ) { return variables.actions.rollInitiative( argumentCollection = arguments ); }
 
 	// ── Delegators: EnemyAIService ────────────────────────────────────────────
-	function playerDecideAndAct( state ) { return variables.enemyAI.playerDecideAndAct( argumentCollection = arguments ); }
 	function endPlayerTurn( state ) { return variables.enemyAI.endPlayerTurn( argumentCollection = arguments ); }
 	function runEnemyTurn( state ) { return variables.enemyAI.runEnemyTurn( argumentCollection = arguments ); }
 	function rollForInitiative( state ) { return variables.enemyAI.rollForInitiative( argumentCollection = arguments ); }

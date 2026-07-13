@@ -104,9 +104,6 @@ class extends="modules.socketbox.models.WebSocketCore" {
 			case "end_turn":
 				_handleEndTurn( state, combatService );
 				break;
-			case "auto_step":
-				_handleAutoStep( state, combatService );
-				break;
 			case "select_target":
 				_handleSelectTarget( state, data );
 				break;
@@ -236,13 +233,6 @@ class extends="modules.socketbox.models.WebSocketCore" {
 		arguments.state.actionUsed = true;
 		arguments.combatService.playerAttack( arguments.state, choice.weapon, choice.disadvantage );
 		arguments.state.selectedOpponentIndex = arguments.state.opponent.mobIndex;
-
-		if (
-			!arguments.state.gameOver && arguments.state.attacksUsedThisTurn >= arguments.combatService.attacksPerTurn( player ) &&
-			arguments.combatService.allPlayersExhausted( arguments.state )
-		) {
-			arguments.combatService.endPlayerTurn( arguments.state );
-		}
 	}
 
 	private function _handleCastCantrip( state, data, combatService ) {
@@ -252,9 +242,6 @@ class extends="modules.socketbox.models.WebSocketCore" {
 		arguments.state.opponent = arguments.state.opponents[ arguments.state.selectedOpponentIndex ];
 		arguments.combatService.castCantrip( arguments.state, arguments.data.spellName );
 		arguments.state.selectedOpponentIndex = arguments.state.opponent.mobIndex;
-		if ( !arguments.state.gameOver && arguments.combatService.allPlayersExhausted( arguments.state ) ) {
-			arguments.combatService.endPlayerTurn( arguments.state );
-		}
 	}
 
 	private function _handleCastSpell( state, data, combatService ) {
@@ -269,9 +256,6 @@ class extends="modules.socketbox.models.WebSocketCore" {
 		}
 		arguments.combatService.castLeveledSpell( arguments.state, arguments.data.spellName, healTarget );
 		arguments.state.selectedOpponentIndex = arguments.state.opponent.mobIndex;
-		if ( !arguments.state.gameOver && arguments.combatService.allPlayersExhausted( arguments.state ) ) {
-			arguments.combatService.endPlayerTurn( arguments.state );
-		}
 	}
 
 	private function _handleSmite( state, data, combatService ) {
@@ -283,12 +267,6 @@ class extends="modules.socketbox.models.WebSocketCore" {
 		arguments.state.actionUsed = true;
 		arguments.combatService.smiteAttack( arguments.state, arguments.data.slotLevel );
 		arguments.state.selectedOpponentIndex = arguments.state.opponent.mobIndex;
-		if (
-			!arguments.state.gameOver && arguments.state.attacksUsedThisTurn >= arguments.combatService.attacksPerTurn( arguments.state.player ) &&
-			arguments.combatService.allPlayersExhausted( arguments.state )
-		) {
-			arguments.combatService.endPlayerTurn( arguments.state );
-		}
 	}
 
 	private function _handleOffHandAttack( state, combatService ) {
@@ -307,9 +285,6 @@ class extends="modules.socketbox.models.WebSocketCore" {
 		arguments.state.opponent = arguments.state.opponents[ arguments.state.selectedOpponentIndex ];
 		arguments.combatService.attemptGrapple( arguments.state, arguments.state.player, arguments.state.opponent );
 		arguments.state.selectedOpponentIndex = arguments.state.opponent.mobIndex;
-		if ( !arguments.state.gameOver && arguments.combatService.allPlayersExhausted( arguments.state ) ) {
-			arguments.combatService.endPlayerTurn( arguments.state );
-		}
 	}
 
 	private function _handleShove( state, combatService ) {
@@ -319,9 +294,6 @@ class extends="modules.socketbox.models.WebSocketCore" {
 		arguments.state.opponent = arguments.state.opponents[ arguments.state.selectedOpponentIndex ];
 		arguments.combatService.attemptShove( arguments.state, arguments.state.player, arguments.state.opponent );
 		arguments.state.selectedOpponentIndex = arguments.state.opponent.mobIndex;
-		if ( !arguments.state.gameOver && arguments.combatService.allPlayersExhausted( arguments.state ) ) {
-			arguments.combatService.endPlayerTurn( arguments.state );
-		}
 	}
 
 	private function _handleBreathWeapon( state, combatService ) {
@@ -331,9 +303,6 @@ class extends="modules.socketbox.models.WebSocketCore" {
 		arguments.state.opponent = arguments.state.opponents[ arguments.state.selectedOpponentIndex ];
 		arguments.combatService.useBreathWeapon( arguments.state );
 		arguments.state.selectedOpponentIndex = arguments.state.opponent.mobIndex;
-		if ( !arguments.state.gameOver && arguments.combatService.allPlayersExhausted( arguments.state ) ) {
-			arguments.combatService.endPlayerTurn( arguments.state );
-		}
 	}
 
 	private function _handleUseItem( state, data, combatService, characterService ) {
@@ -360,9 +329,6 @@ class extends="modules.socketbox.models.WebSocketCore" {
 		arguments.state.items = arguments.characterService.getItemInventory( arguments.state.player.characterId );
 		if ( arguments.state.initiativeRolled ) {
 			arguments.state.actionUsed = true;
-			if ( arguments.combatService.allPlayersExhausted( arguments.state ) ) {
-				arguments.combatService.endPlayerTurn( arguments.state );
-			}
 		}
 	}
 
@@ -395,9 +361,6 @@ class extends="modules.socketbox.models.WebSocketCore" {
 			return;
 		}
 		arguments.combatService.rollDeathSave( arguments.state );
-		if ( !arguments.state.gameOver && arguments.combatService.allPlayersExhausted( arguments.state ) ) {
-			arguments.combatService.endPlayerTurn( arguments.state );
-		}
 	}
 
 	private function _handleEndTurn( state, combatService ) {
@@ -405,55 +368,6 @@ class extends="modules.socketbox.models.WebSocketCore" {
 			return;
 		}
 		arguments.combatService.endPlayerTurn( arguments.state );
-	}
-
-	private function _handleAutoStep( state, combatService ) {
-		if ( arguments.state.gameOver ) {
-			arguments.state.autoBattling = false;
-			return;
-		}
-		if ( !arguments.state.initiativeRolled ) {
-			return;
-		}
-		arguments.state.autoBattling = true;
-
-		if ( arguments.state.currentTurn == "player" ) {
-			if ( structKeyExists( arguments.state.player, "isDying" ) && arguments.state.player.isDying ) {
-				arguments.combatService.rollDeathSave( arguments.state );
-			} else if ( arguments.state.player.hitPoints > 0 ) {
-				arguments.state.opponent = arguments.state.opponents[ arguments.state.selectedOpponentIndex ];
-				arguments.combatService.playerDecideAndAct( arguments.state );
-				arguments.state.selectedOpponentIndex = arguments.state.opponent.mobIndex;
-			}
-			if ( !arguments.state.gameOver ) {
-				if ( arguments.combatService.allPlayersExhausted( arguments.state ) ) {
-					arguments.combatService.endPlayerTurn( arguments.state );
-				} else {
-					_autoAdvanceActiveCharacter( arguments.state, arguments.combatService );
-				}
-			}
-		}
-
-		if ( arguments.state.gameOver ) {
-			arguments.state.autoBattling = false;
-		}
-	}
-
-	/**
-	 * Auto-battle helper: once the currently active party member has spent
-	 * their action economy but other living members haven't, switches to the
-	 * next un-acted member instead of ending the party's turn — so auto-step
-	 * cycles through the whole party before handing off to the enemy.
-	 */
-	private function _autoAdvanceActiveCharacter( state, combatService ) {
-		var total = arguments.state.players.len();
-		for ( var offset = 1; offset <= total; offset++ ) {
-			var idx = ( ( arguments.state.activePlayerIndex - 1 + offset ) mod total ) + 1;
-			if ( arguments.combatService.memberHasActionsLeft( arguments.state, idx ) ) {
-				arguments.combatService.switchActivePlayer( arguments.state, idx );
-				return;
-			}
-		}
 	}
 
 	private function _handleSelectActiveCharacter( state, data, combatService, characterService ) {
@@ -512,7 +426,6 @@ class extends="modules.socketbox.models.WebSocketCore" {
 		arguments.state.stateSaved            = false;
 		arguments.state.round                 = 1;
 		arguments.state.currentTurn           = "player";
-		arguments.state.autoBattling          = false;
 		for ( var member in arguments.state.players ) {
 			member.inCombat = false;
 			application.combatService.initMemberEconomy( member );
@@ -720,7 +633,6 @@ class extends="modules.socketbox.models.WebSocketCore" {
 			"initiativeRolled"      : arguments.state.initiativeRolled,
 			"selectedOpponentIndex" : arguments.state.selectedOpponentIndex,
 			"items"                 : arguments.state.items,
-			"autoBattling"          : arguments.state.autoBattling,
 			"gridPois"              : arguments.state.gridPois,
 			"asiMode"               : arguments.state.asiMode,
 			"asiAbility1"           : arguments.state.asiAbility1,
