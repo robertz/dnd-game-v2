@@ -1,4 +1,4 @@
-const { createApp, reactive, ref, computed, onMounted, inject } = Vue;
+const { createApp, reactive, ref, computed, onMounted, onUnmounted, inject } = Vue;
 const { createRouter, createWebHistory } = VueRouter;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -333,17 +333,30 @@ const App = {
 			><span></span><span></span><span></span></button>
 			<nav class="site-nav" :class="{ 'site-nav-open': mobileNavOpen }">
 				<router-link to="/"              :class="{ 'site-nav-active': route.path === '/' }">Character Select</router-link>
-				<router-link to="/character/new" :class="{ 'site-nav-active': route.path === '/character/new' }">Create Character</router-link>
 				<template v-if="hasCharacter">
 					<router-link to="/character/sheet" :class="{ 'site-nav-active': route.path === '/character/sheet' }">Character Sheet</router-link>
 					<router-link to="/adventure"       :class="{ 'site-nav-active': route.path === '/adventure' }">Adventure</router-link>
 				</template>
 				<router-link to="/map-editor" class="site-nav-desktop-only" :class="{ 'site-nav-active': route.path === '/map-editor' }">Map Editor</router-link>
-				<template v-if="currentUser">
-					<span class="site-nav-avatar" :title="currentUser.username">{{ currentUser.username.charAt(0).toUpperCase() }}</span>
-					<a href="#" @click.prevent="logout">Log Out</a>
-				</template>
-				<router-link v-else to="/login" :class="{ 'site-nav-active': route.path === '/login' }">Sign In</router-link>
+
+				<div class="site-nav-account" ref="accountMenuEl" :class="{ 'site-nav-account-open': accountMenuOpen }">
+					<button
+						type="button"
+						class="site-nav-account-trigger"
+						:aria-expanded="accountMenuOpen"
+						aria-label="Account menu"
+						@click="accountMenuOpen = !accountMenuOpen"
+					>
+						<span v-if="currentUser" class="site-nav-avatar" :title="currentUser.username">{{ currentUser.username.charAt(0).toUpperCase() }}</span>
+						<span v-else class="site-nav-avatar">?</span>
+					</button>
+					<div class="site-nav-account-menu">
+						<span v-if="currentUser" class="site-nav-account-username">{{ currentUser.username }}</span>
+						<router-link to="/character/new" :class="{ 'site-nav-active': route.path === '/character/new' }">Create Character</router-link>
+						<a v-if="currentUser" href="#" @click.prevent="logout">Log Out</a>
+						<router-link v-else to="/login" :class="{ 'site-nav-active': route.path === '/login' }">Sign In</router-link>
+					</div>
+				</div>
 			</nav>
 		</header>
 		<main class="scroll">
@@ -364,13 +377,26 @@ const App = {
 		// links appear as soon as a first character is picked.
 		const hasCharacter = ref( !!localStorage.getItem( "charId" ) );
 		const mobileNavOpen = ref( false );
+		const accountMenuOpen = ref( false );
+		const accountMenuEl = ref( null );
 
-		// Collapse the mobile menu on every navigation instead of requiring
-		// a close handler on each individual link/router-link.
+		// Collapse the mobile menu and the account dropdown on every navigation
+		// instead of requiring a close handler on each individual link.
 		Vue.watch( () => route.path, () => {
 			mobileNavOpen.value = false;
+			accountMenuOpen.value = false;
 			hasCharacter.value  = !!localStorage.getItem( "charId" );
 		} );
+
+		// Close the account dropdown on an outside click — mousedown (not
+		// click) so it fires before a click on another nav link navigates.
+		function onDocumentMousedown( evt ) {
+			if ( accountMenuOpen.value && accountMenuEl.value && !accountMenuEl.value.contains( evt.target ) ) {
+				accountMenuOpen.value = false;
+			}
+		}
+		onMounted( () => document.addEventListener( "mousedown", onDocumentMousedown ) );
+		onUnmounted( () => document.removeEventListener( "mousedown", onDocumentMousedown ) );
 
 		onMounted( async () => {
 			const result = await api( "/api/auth.bxm" );
@@ -383,7 +409,7 @@ const App = {
 			router.push( "/login" );
 		}
 
-		return { route, hasCharacter, currentUser, mobileNavOpen, logout };
+		return { route, hasCharacter, currentUser, mobileNavOpen, accountMenuOpen, accountMenuEl, logout };
 	}
 };
 

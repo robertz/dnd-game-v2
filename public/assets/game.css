@@ -204,11 +204,11 @@ main.scroll {
 	box-shadow: 0 0 10px 1px rgba(185, 146, 47, 0.4);
 }
 
-/* The signed-in user reads as a round avatar badge (first initial) among
-   the .site-nav pill links — same dark-fill/gold-border treatment as the
-   nav buttons so it belongs in that row, but circular and non-interactive
-   so it doesn't look like just another link. Full username is a title
-   tooltip. */
+/* The signed-in user reads as a round avatar badge (first initial) —
+   same dark-fill/gold-border treatment as the nav pills so it belongs in
+   that row, but circular. It's the account-menu trigger, so it stays
+   interactive (see .site-nav-account below); logged-out state shows a "?"
+   in the same badge instead of a separate control. */
 .site-nav-avatar {
 	width: 34px;
 	height: 34px;
@@ -222,7 +222,63 @@ main.scroll {
 	color: var(--gold);
 	background: var(--night);
 	border: 1px solid var(--gold);
-	cursor: default;
+}
+
+/* Account dropdown — houses the lower-frequency nav actions (create
+   character, sign in/out) behind the avatar so the visible pill row stays
+   to the 3-4 links people actually navigate between. */
+.site-nav-account {
+	position: relative;
+	display: flex;
+}
+
+.site-nav-account-trigger {
+	background: none;
+	border: none;
+	padding: 0;
+	cursor: pointer;
+	display: inline-flex;
+	border-radius: 50%;
+	transition: box-shadow var(--speed) var(--ease);
+}
+
+.site-nav-account-trigger:hover,
+.site-nav-account-open .site-nav-account-trigger {
+	box-shadow: 0 0 10px 1px rgba(185, 146, 47, 0.55);
+}
+
+.site-nav-account-menu {
+	display: none;
+	position: absolute;
+	top: calc(100% + 8px);
+	right: 0;
+	z-index: 20;
+	flex-direction: column;
+	align-items: stretch;
+	gap: 0.4rem;
+	min-width: 170px;
+	background: var(--night);
+	border: 1px solid var(--gold);
+	border-radius: var(--radius-sm);
+	padding: 0.6rem;
+	box-shadow: 0 10px 30px rgba(0, 0, 0, 0.55);
+}
+
+.site-nav-account-open .site-nav-account-menu {
+	display: flex;
+}
+
+.site-nav-account-menu a {
+	text-align: center;
+}
+
+.site-nav-account-username {
+	font-family: "Cinzel Decorative", serif;
+	font-size: 0.8rem;
+	color: var(--gold);
+	text-align: center;
+	padding-bottom: 0.2rem;
+	border-bottom: 1px solid rgba(185, 146, 47, 0.35);
 }
 
 .parchment-panel {
@@ -1838,6 +1894,37 @@ main.scroll {
 	   stretching to the column's full width like the link pills above. */
 	.site-nav .site-nav-avatar {
 		align-self: center;
+	}
+
+	/* The hamburger panel is already a gated, single-level menu — a nested
+	   dropdown inside it would be a menu-in-a-menu. Fold the account items
+	   into the stacked column directly instead: hide the trigger button and
+	   force the menu open and statically positioned. */
+	.site-nav-account {
+		flex-direction: column;
+		align-items: stretch;
+		width: 100%;
+	}
+
+	.site-nav-account-trigger {
+		align-self: center;
+	}
+
+	.site-nav-account-menu {
+		display: flex;
+		position: static;
+		width: 100%;
+		box-sizing: border-box;
+		box-shadow: none;
+		border: none;
+		background: none;
+		padding: 0;
+		margin-top: 0.5rem;
+	}
+
+	.site-nav-account-menu a {
+		width: 100%;
+		box-sizing: border-box;
 	}
 }
 
