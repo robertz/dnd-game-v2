@@ -55,7 +55,7 @@
 			"dbdriver": "${env.DB_DRIVER:MySQL}",
 			"dsn": "jdbc:mysql://{host}:{port}/{database}",
 			"host": "${env.DB_HOST:127.0.0.1}",
-			"password": "",
+			"password": "${env.DB_PASSWORD}",
 			"port": "${env.DB_PORT:3306}",
 			"username": "${env.DB_USER:root}"
 		}
