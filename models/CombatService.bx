@@ -34,7 +34,7 @@ class singleton {
 		variables.monsters = new models.combat.MonsterLibrary( variables.rules, variables.grid );
 		variables.spellcasting = new models.combat.SpellcastingService( variables.dice );
 		variables.progression = new models.combat.ProgressionService( variables.rules, variables.spellcasting );
-		variables.characterState = new models.combat.CharacterStateService( variables.rules, variables.spellcasting );
+		variables.characterState = new models.combat.CharacterStateService( variables.rules, variables.spellcasting, variables.progression );
 		variables.actions = new models.combat.CombatActionsService(
 			variables.dice, variables.rules, variables.grid,
 			variables.spellcasting, variables.progression, variables.characterState

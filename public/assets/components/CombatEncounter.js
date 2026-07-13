@@ -234,6 +234,9 @@ const CombatEncounter = {
 							>💚 {{ isHealTarget(memberIdx+1) ? 'Heal target' : 'Target for heal' }}</button>
 							<p class="stat-subtitle">Level {{ member.level }} {{ member.class }}{{ member.hitPoints <= 0 ? ' — Unconscious' : (foeBloodied(member) ? ' — Bloodied' : '') }}</p>
 							<div class="hp-bar"><div :class="['hp-bar-fill', foeBloodied(member) ? 'hp-bar-fill-bloodied' : '']" :style="{ width: Math.max(0, member.hitPoints) / member.maxHitPoints * 100 + '%' }"></div></div>
+							<div v-if="member.nextLevelXp > 0" class="xp-row xp-row-sm" :title="member.experiencePoints + ' / ' + member.nextLevelXp + ' XP'">
+								<div class="xp-bar xp-bar-sm"><div class="xp-bar-fill" :style="{ width: xpPercent(member) + '%' }"></div></div>
+							</div>
 							<div class="stat-inline">
 								<span><strong>AC</strong> {{ member.armorClass }}</span>
 								<span><strong>HP</strong> {{ Math.max(0, member.hitPoints) }}/{{ member.maxHitPoints }}</span>
@@ -699,6 +702,12 @@ const CombatEncounter = {
 			return foe.hitPoints > 0 && foe.hitPoints <= foe.maxHitPoints / 2;
 		}
 
+		function xpPercent( member ) {
+			const span = member.nextLevelXp - member.currentLevelXp;
+			if ( span <= 0 ) return 100;
+			return Math.max( 0, Math.min( 100, ( member.experiencePoints - member.currentLevelXp ) / span * 100 ) );
+		}
+
 		const visibleFoes = computed( () => {
 			if ( !cs.opponents ) return [];
 			return cs.opponents.filter( f => f.visible && ( f.hitPoints > 0 || f.defeatedAtRound === cs.round ) );
@@ -822,7 +831,7 @@ const CombatEncounter = {
 			vpMinCol, vpMinRow, viewportCols, viewportRows,
 			asiMode, asiAbility1, asiAbility2, asiSelectedFeat, asiSelectedSkills, restDiceCount,
 			abilityAbbrs, ALL_SKILLS, availableLevelUpFeats,
-			playerBloodied, visibleFoes, foeBloodied, remainingAttacks, canOffHandAttack,
+			playerBloodied, visibleFoes, foeBloodied, xpPercent, remainingAttacks, canOffHandAttack,
 			hasActionOptions, hasBonusOptions,
 			canRest, maxRestDice, hoursUntilNextLongRest, gameClockLabel,
 			tileClass, tileTitle, tileEmoji, tileClick, selectActiveCharacter,

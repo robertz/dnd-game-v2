@@ -137,6 +137,11 @@ class singleton {
 
 		var newTotalXp = totals.experience_points[ 1 ];
 		arguments.state.log.prepend( "#player.name# gains #arguments.xp# XP (#newTotalXp# total)." );
+		// Keeps the in-memory struct (and the combat screen's XP bar, which
+		// reads these three fields — see CharacterStateService.loadCharacter())
+		// in sync with the DB write above; nothing else refreshes them until
+		// the next full encounter load.
+		player.experiencePoints = newTotalXp;
 
 		// `totalLevel` (sum across every class — see loadCharacter()) is what
 		// the XP table actually measures; a single-class character always has
@@ -149,6 +154,8 @@ class singleton {
 			currentLevel = structKeyExists( player, "totalLevel" ) ? player.totalLevel : player.level;
 			leveledUp = true;
 		}
+		player.currentLevelXp = xpForLevel( currentLevel );
+		player.nextLevelXp = currentLevel < 20 ? xpForLevel( currentLevel + 1 ) : 0;
 
 		if ( leveledUp ) {
 			// hit_points is persisted as the new max, not the character's

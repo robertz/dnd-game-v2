@@ -434,7 +434,7 @@ class extends="modules.socketbox.models.WebSocketCore" {
 		arguments.state.actionUsed            = false;
 		arguments.state.bonusActionUsed       = false;
 		arguments.state.attacksUsedThisTurn   = 0;
-		arguments.state.log                   = [ "The dungeon is cleared. You stand victorious." ];
+		arguments.state.log.prepend( "The dungeon is cleared. You stand victorious." );
 	}
 
 	private function _handleShortRest( state, data, combatService ) {

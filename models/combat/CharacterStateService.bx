@@ -2,14 +2,15 @@
  * Character-state I/O for encounters: hydrating the in-combat player
  * struct from the characters table (loadCharacter), persisting it back
  * (saveCharacterState), and the Short/Long Rest recovery rules that
- * read and write that state. Depends on RulesService and
- * SpellcastingService. Stateless.
+ * read and write that state. Depends on RulesService, SpellcastingService,
+ * and ProgressionService. Stateless.
  */
 class singleton {
 
-	function init( rules, spellcasting ) {
+	function init( rules, spellcasting, progression ) {
 		variables.rules        = arguments.rules;
 		variables.spellcasting = arguments.spellcasting;
+		variables.progression  = arguments.progression;
 		return this;
 	}
 
@@ -240,6 +241,11 @@ class singleton {
 			"hpBonusPerLevel": arrayFindNoCase( speciesMechanics.traitNames, "Dwarven Toughness" ) > 0 ? 1 : 0,
 			"speed": row.speed[ 1 ],
 			"experiencePoints": row.experience_points[ 1 ],
+			// For the combat screen's XP bar — same shape as characters.bxm's
+			// character-select XP bar. 0 once the character is already at max
+			// level, matching how there's no "next" threshold to bar toward.
+			"currentLevelXp": variables.progression.xpForLevel( row.level[ 1 ] ),
+			"nextLevelXp": row.level[ 1 ] < 20 ? variables.progression.xpForLevel( row.level[ 1 ] + 1 ) : 0,
 			// Lifetime counters, persisted directly as they happen (see
 			// _incrementCharacterStat()) rather than batched into
 			// saveCharacterState() — "monstersFought" is per-encounter (every

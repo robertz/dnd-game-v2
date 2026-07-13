@@ -1442,6 +1442,14 @@ main.scroll {
 	white-space: nowrap;
 }
 
+.xp-row-sm {
+	margin-bottom: 0.4rem;
+}
+
+.xp-bar-sm {
+	height: 4px;
+}
+
 .char-card-footer {
 	display: flex;
 	align-items: center;
