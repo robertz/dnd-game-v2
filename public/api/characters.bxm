@@ -43,6 +43,9 @@
 			return;
 		}
 		writeOutput( jsonSerialize( { "id": charId } ) );
+	} else if ( cgi.request_method == "DELETE" ) {
+		characterService.deleteCharacter( characterId = url.id, ownerUserId = userId );
+		writeOutput( jsonSerialize( { "success": true } ) );
 	} else {
 		combatService = application.combatService;
 		rows = characterService.listSavedCharacters( userId );

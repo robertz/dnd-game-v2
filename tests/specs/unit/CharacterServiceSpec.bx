@@ -1,0 +1,71 @@
+/**
+ * Unit tests for app/models/CharacterService.bx — currently just
+ * deleteCharacter()'s ownership scoping. There's no separate test
+ * datasource (see runtime/boxlang.json — "gameserver" is the only one
+ * configured), so this hits the real dev DB directly like the app does;
+ * every fixture it creates (a throwaway user + character) is cleaned up
+ * in afterAll.
+ */
+class extends="testbox.system.BaseSpec" {
+
+	function beforeAll(){
+		variables.service = new models.CharacterService();
+
+		queryExecute(
+			"INSERT INTO users (username, password_hash) VALUES (:username, 'x')",
+			{ "username": "ts_owner_#left( createUUID(), 8 )#" },
+			{ datasource: "gameserver", result: "variables.ownerResult" }
+		);
+		variables.ownerUserId = ownerResult.generatedKey;
+
+		queryExecute(
+			"INSERT INTO users (username, password_hash) VALUES (:username, 'x')",
+			{ "username": "ts_other_#left( createUUID(), 8 )#" },
+			{ datasource: "gameserver", result: "variables.otherResult" }
+		);
+		variables.otherUserId = otherResult.generatedKey;
+	}
+
+	function afterAll(){
+		queryExecute(
+			"DELETE FROM users WHERE id IN (:a, :b)",
+			{ "a": variables.ownerUserId, "b": variables.otherUserId },
+			{ datasource: "gameserver" }
+		);
+	}
+
+	private function makeCharacter(){
+		return service.createCharacter(
+			ownerUserId = variables.ownerUserId,
+			name        = "Test Deleteme",
+			classId     = 1,
+			str = 10, dex = 10, con = 10, intScore = 10, wis = 10, cha = 10
+		);
+	}
+
+	function run(){
+		describe( "deleteCharacter()", () => {
+			it( "removes the character from its owner's saved list", () => {
+				var charId = makeCharacter();
+				service.deleteCharacter( characterId = charId, ownerUserId = variables.ownerUserId );
+
+				var remaining = service.listSavedCharacters( variables.ownerUserId );
+				var stillThere = remaining.reduce( ( found, row ) => found || ( row.id == charId ), false );
+				expect( stillThere ).toBeFalse();
+			} );
+
+			it( "does not delete a character belonging to a different user", () => {
+				var charId = makeCharacter();
+				service.deleteCharacter( characterId = charId, ownerUserId = variables.otherUserId );
+
+				var remaining = service.listSavedCharacters( variables.ownerUserId );
+				var stillThere = remaining.reduce( ( found, row ) => found || ( row.id == charId ), false );
+				expect( stillThere ).toBeTrue();
+
+				// Clean up — the mismatched-owner call above was a no-op.
+				service.deleteCharacter( characterId = charId, ownerUserId = variables.ownerUserId );
+			} );
+		} );
+	}
+
+}

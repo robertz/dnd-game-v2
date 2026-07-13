@@ -202,6 +202,23 @@ class singleton {
 	}
 
 	/**
+	 * Deletes a character owned by ownerUserId — every dependent row
+	 * (inventory, feats, features, multiclass levels) cascades via FK, per
+	 * db/schema.sql. Scoped to ownerUserId so one player can't delete
+	 * another's character by guessing an id.
+	 *
+	 * @characterId characters.id.
+	 * @ownerUserId The requesting user — must match characters.owner_user_id.
+	 */
+	function deleteCharacter( characterId, ownerUserId ) {
+		queryExecute(
+			"DELETE FROM characters WHERE id = :characterId AND owner_user_id = :ownerUserId",
+			{ "characterId": arguments.characterId, "ownerUserId": arguments.ownerUserId },
+			{ datasource: "gameserver" }
+		);
+	}
+
+	/**
 	 * Creates a new character row with standard derived stats — Level 1 Hit
 	 * Points (class hit die max + Con modifier, per the "Level 1 Hit Points
 	 * by Class" table), base Armor Class (10 + Dex modifier; class features

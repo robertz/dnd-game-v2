@@ -1433,6 +1433,33 @@ main.scroll {
 	white-space: nowrap;
 }
 
+/* Sits at the far end of .char-card-header (a space-between row) without
+   its own wrapper — quiet until hovered so it doesn't compete with the
+   character name for attention on a card whose primary action is picking
+   a hero, not deleting one. */
+.char-card-delete {
+	margin-left: auto;
+	background: none;
+	border: 1px solid transparent;
+	border-radius: var(--radius-sm);
+	color: var(--parchment);
+	opacity: 0.5;
+	font-size: 1.1rem;
+	line-height: 1;
+	width: 26px;
+	height: 26px;
+	flex: none;
+	cursor: pointer;
+	transition: opacity var(--speed) var(--ease), color var(--speed) var(--ease),
+		border-color var(--speed) var(--ease);
+}
+
+.char-card-delete:hover {
+	opacity: 1;
+	color: var(--blood);
+	border-color: var(--blood);
+}
+
 .char-card .hp-bar {
 	margin: 0.5rem 0 0.4rem;
 }

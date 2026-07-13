@@ -69,6 +69,13 @@ const CharacterSelect = {
 							<div class="char-card-header">
 								<h3 class="fantasy-heading">{{ character.name }}</h3>
 								<span class="char-level-badge">Lv {{ character.level }}</span>
+								<button
+									type="button"
+									class="char-card-delete"
+									title="Delete character"
+									aria-label="Delete character"
+									@click.stop="deleteCharacter( character )"
+								>&times;</button>
 							</div>
 							<p class="stat-subtitle">
 								{{ character.species }} {{ character.className }}
@@ -157,6 +164,17 @@ const CharacterSelect = {
 			router.push( "/adventure" );
 		}
 
+		async function deleteCharacter( character ) {
+			if ( !window.confirm( `Delete ${ character.name }? This can't be undone.` ) ) return;
+			await api( `/api/characters.bxm?id=${ character.id }`, { method: "DELETE" } );
+			characters.value = characters.value.filter( ( c ) => c.id !== character.id );
+			const idx = party.value.indexOf( character.id );
+			if ( idx !== -1 ) party.value.splice( idx, 1 );
+			if ( localStorage.getItem( "charId" ) == character.id ) {
+				localStorage.removeItem( "charId" );
+			}
+		}
+
 		function isInParty( id ) {
 			return party.value.includes( id );
 		}
@@ -197,7 +215,7 @@ const CharacterSelect = {
 
 		return {
 			characters, loading, error, party, selectCharacter, playCharacter,
-			isInParty, togglePartyMember, startPartyAdventure,
+			deleteCharacter, isInParty, togglePartyMember, startPartyAdventure,
 			abilityMod, hpPercent, xpPercent, abilityOrder
 		};
 	}
