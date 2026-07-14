@@ -1,4 +1,4 @@
-const VIEWPORT_RADIUS = 12;
+const VIEWPORT_RADIUS = 9;
 
 // Stable per-slot color identity for telling party members apart on the
 // battle grid and in the sidebar — keyed by position in state.players, not
