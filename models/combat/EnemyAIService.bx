@@ -39,6 +39,25 @@ class singleton {
 	 * every action alongside the opponent-visibility sweep so both use one
 	 * consistent snapshot of party positions.
 	 *
+	 * Each living member's own sweep is cached in `state._visCache` (keyed by
+	 * `characterId`, never by array index — a member's position in
+	 * `state.players` can't shift, but keying by their stable identity is
+	 * one less thing to get wrong) and only redone when that member's
+	 * position no longer matches the position it was cached for — a move
+	 * action only ever changes one member's position, so the other 1-3
+	 * members' sweeps (each up to ~625 hasLineOfSight() traces) are reused
+	 * as-is instead of redone from scratch every single action. Deliberately
+	 * kept on `state` rather than on the member struct itself: `state.players`
+	 * gets sent to the client whole whenever anything on it changes (see
+	 * WebSocket.bx's _buildBroadcast()), and a per-member cache living there
+	 * would both bloat that payload and — since a move updates the mover's
+	 * cache every time — defeat the "only resend players when something
+	 * actually changed" comparison that exists to avoid exactly that kind of
+	 * bloat. _checkMapTransition (WebSocket.bx) clears this cache on a map
+	 * change, since a stale entry keyed by a position that happens to match
+	 * on the new map would otherwise reuse visibility traced against the old
+	 * map's walls.
+	 *
 	 * `visibleTiles` itself is small (bounded by GridService's sight cap) and
 	 * gets fully replaced every call — WebSocket.bx's broadcast sends it
 	 * whole every state_update rather than diffing it. `exploredTiles` only
@@ -49,16 +68,35 @@ class singleton {
 		if ( !structKeyExists( arguments.state, "map" ) ) {
 			return;
 		}
-		var positions = [];
+		if ( !structKeyExists( arguments.state, "_visCache" ) ) {
+			arguments.state._visCache = {};
+		}
+		var visible = {};
+		var anyLiving = false;
 		for ( var member in arguments.state.players ) {
-			if ( member.hitPoints > 0 ) {
-				arrayAppend( positions, member.position );
+			if ( member.hitPoints <= 0 ) {
+				continue;
+			}
+			anyLiving = true;
+			var cached = arguments.state._visCache[ member.characterId ] ?: "";
+			var cacheStale = isSimpleValue( cached )
+				|| cached.x != member.position.x
+				|| cached.y != member.position.y;
+			if ( cacheStale ) {
+				cached = {
+					"x": member.position.x,
+					"y": member.position.y,
+					"tiles": variables.grid.visibleTilesFrom( arguments.state.map, [ member.position ] )
+				};
+				arguments.state._visCache[ member.characterId ] = cached;
+			}
+			for ( var key in cached.tiles ) {
+				visible[ key ] = true;
 			}
 		}
-		if ( positions.len() == 0 ) {
+		if ( !anyLiving ) {
 			return;
 		}
-		var visible = variables.grid.visibleTilesFrom( arguments.state.map, positions );
 		arguments.state.visibleTiles = visible;
 		if ( !structKeyExists( arguments.state, "exploredTiles" ) ) {
 			arguments.state.exploredTiles = {};

@@ -566,10 +566,15 @@ class extends="modules.socketbox.models.WebSocketCore" {
 				arguments.state.mapChanged           = true;
 				// Fog of war is per-map — a new map's exploredTiles starts fresh
 				// from wherever the party lands, same as the initial sweep
-				// combat.bxm does on first entering any map.
+				// combat.bxm does on first entering any map. The per-member
+				// vision cache (EnemyAIService._updateExploredTiles()'s
+				// state._visCache) is cleared too — a stale entry keyed by a
+				// position that happens to match on the new map would
+				// otherwise reuse visibility traced against the old map's walls.
 				var startVisible = arguments.combatService.visibleTilesFrom( newMap, partyPosition );
 				arguments.state.visibleTiles  = startVisible;
 				arguments.state.exploredTiles = duplicate( startVisible );
+				arguments.state._visCache     = {};
 				arguments.combatService.startNewRound( arguments.state );
 				arguments.state.log.prepend( "#player.name# travels to a new area." );
 				return;
