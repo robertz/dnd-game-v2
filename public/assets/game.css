@@ -659,7 +659,15 @@ main.scroll {
 	border: 3px solid var(--gold);
 	border-radius: 3px;
 	box-shadow: inset 0 0 20px rgba(0, 0, 0, 0.8), 0 8px 24px rgba(0, 0, 0, 0.5);
-	max-width: 100%;
+	/* No max-width here — .tile has a 16px width floor (see its clamp()),
+	   so on a narrow viewport the grid's natural content width can exceed
+	   the screen. Capping this element's own box to max-width:100% (as it
+	   used to) squeezed the *border* down to the viewport width while the
+	   overflowing tiles kept rendering past it — the border no longer
+	   traced the actual map edges, just wherever the clipped box happened
+	   to end. Let this grow to its natural size instead and let
+	   .battle-grid-wrap's overflow-x:auto scroll to it, same fix already
+	   used for .editor-grid-wrap/.mapeditor-canvas. */
 }
 
 .tile {
