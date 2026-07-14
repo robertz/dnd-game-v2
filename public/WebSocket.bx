@@ -423,6 +423,10 @@ class extends="modules.socketbox.models.WebSocketCore" {
 		arguments.state.gameOver              = false;
 		arguments.state.outcome               = "";
 		arguments.state.initiativeRolled      = false;
+		// The next roster of opponents this player meets is a fresh
+		// encounter — rollForInitiative() should credit "monsters fought"
+		// for it again, not treat it as a continuation of the cleared fight.
+		arguments.state.metOpponents          = false;
 		arguments.state.stateSaved            = false;
 		arguments.state.round                 = 1;
 		arguments.state.currentTurn           = "player";
@@ -547,6 +551,10 @@ class extends="modules.socketbox.models.WebSocketCore" {
 				arguments.state.opponent             = opponents[ 1 ];
 				arguments.state.selectedOpponentIndex = 1;
 				arguments.state.initiativeRolled     = false;
+				// New map, new roster — rollForInitiative() should credit
+				// "monsters fought" for these opponents too (see its own and
+				// EnemyAIService.updateCombatState()'s doc comments).
+				arguments.state.metOpponents         = false;
 				arguments.state.gameOver             = false;
 				arguments.state.outcome              = "";
 				arguments.state.player.inCombat      = false;

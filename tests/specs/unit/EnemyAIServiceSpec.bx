@@ -33,11 +33,11 @@ class extends="testbox.system.BaseSpec" {
 	}
 
 	private function makeMember( x, y ){
-		return { "name": "Member", "position": { "x": arguments.x, "y": arguments.y }, "inCombat": false, "hitPoints": 10, "maxHitPoints": 10 };
+		return { "name": "Member", "position": { "x": arguments.x, "y": arguments.y }, "inCombat": false, "hitPoints": 10, "maxHitPoints": 10, "modifiers": { "dex": 0 } };
 	}
 
 	private function makeOpponent( x, y, hitPoints = 10 ){
-		return { "name": "Mob", "position": { "x": arguments.x, "y": arguments.y }, "hitPoints": arguments.hitPoints, "visible": false };
+		return { "name": "Mob", "position": { "x": arguments.x, "y": arguments.y }, "hitPoints": arguments.hitPoints, "visible": false, "modifiers": { "dex": 0 } };
 	}
 
 	private function makeState( players, opponents ){
@@ -105,6 +105,49 @@ class extends="testbox.system.BaseSpec" {
 				service.updateCombatState( state );
 				expect( state.players[ 1 ].inCombat ).toBeFalse();
 				expect( state.players[ 2 ].inCombat ).toBeFalse();
+			} );
+
+			it( "drops initiativeRolled back to false once the party breaks every mob's sight", () => {
+				// Both start on the same (right) side of the wall — seen —
+				// then the mob steps behind the wall.
+				var state = makeState( [ makeMember( 6, 2 ) ], [ makeOpponent( 6, 5 ) ] );
+				state.initiativeRolled = true;
+				state.metOpponents = true;
+				service.updateCombatState( state );
+				expect( state.opponents[ 1 ].visible ).toBeTrue();
+
+				state.opponents[ 1 ].position = { "x": 2, "y": 5 };
+				service.updateCombatState( state );
+				expect( state.opponents[ 1 ].visible ).toBeFalse();
+				expect( state.initiativeRolled ).toBeFalse( "losing every mob's sight should return the party to the free-exploring state" );
+			} );
+
+			it( "re-rolls initiative on re-sighting without crediting monsters fought twice", () => {
+				var member = makeMember( 6, 2 );
+				member.characterId = 0; // matches no real row — incrementCharacterStat() is a harmless no-op
+				member.monstersFought = 0;
+				// Guarantees the party wins initiative every roll (ties favor
+				// the player too) so rollForInitiative() never hands off to
+				// runEnemyTurn() here — this test is about the fought-stat
+				// guard, not opponent turn mechanics.
+				member.modifiers.dex = 100;
+				var mob = makeOpponent( 6, 5 );
+				var state = makeState( [ member ], [ mob ] );
+				state.initiativeRolled = false;
+
+				service.updateCombatState( state );
+				expect( state.initiativeRolled ).toBeTrue();
+				expect( state.metOpponents ).toBeTrue();
+				expect( member.monstersFought ).toBe( 1 );
+
+				mob.position = { "x": 2, "y": 5 };
+				service.updateCombatState( state );
+				expect( state.initiativeRolled ).toBeFalse();
+
+				mob.position = { "x": 6, "y": 5 };
+				service.updateCombatState( state );
+				expect( state.initiativeRolled ).toBeTrue();
+				expect( member.monstersFought ).toBe( 1, "re-sighting the same roster must not credit monsters fought a second time" );
 			} );
 		} );
 	}

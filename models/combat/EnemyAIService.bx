@@ -40,6 +40,19 @@ class singleton {
 	 * the round when the active member's movement is spent so unseen mobs
 	 * still take their converge-on-the-player turns.
 	 *
+	 * `initiativeRolled` toggles both ways with sight, not just on: breaking
+	 * every mob's line of sight mid-encounter drops the party back to the
+	 * same free, multi-round exploring flow they had before anything ever
+	 * spotted them (see the client's `!cs.initiativeRolled` branch) — no
+	 * more manually managing turns/actions against mobs that can't currently
+	 * see anyone. The mobs themselves don't forget the party this way (see
+	 * _selectAggroTarget()'s `aware` flag, which is separate and sticky) —
+	 * they keep converging round to round; only the player's own turn
+	 * structure relaxes. Re-spotting re-rolls initiative fresh, but
+	 * rollForInitiative()'s one-time "monsters fought" stat credit is
+	 * guarded separately (`state.metOpponents`) so wandering in and out of
+	 * sight doesn't award it more than once for the same roster.
+	 *
 	 * Visibility is party-wide, not active-member-only: a party spread
 	 * across the map (see CombatActionsService.switchActivePlayer()) can
 	 * leave a member exposed to a mob while the active member is tucked out
@@ -78,8 +91,11 @@ class singleton {
 			rollForInitiative( arguments.state );
 			return;
 		}
-		if ( !nowInCombat && arguments.state.movementRemaining <= 0 && arguments.state.currentTurn == "player" ) {
-			endPlayerTurn( arguments.state );
+		if ( !nowInCombat ) {
+			arguments.state.initiativeRolled = false;
+			if ( arguments.state.movementRemaining <= 0 && arguments.state.currentTurn == "player" ) {
+				endPlayerTurn( arguments.state );
+			}
 		}
 	}
 
@@ -592,6 +608,12 @@ class singleton {
 	 * `state.currentTurn` to whoever acts first (ties favor the player
 	 * character). If the opponent wins, immediately runs their first turn.
 	 *
+	 * Can run more than once per encounter — updateCombatState() re-rolls
+	 * initiative whenever the party is re-spotted after having broken every
+	 * mob's line of sight (see its own doc comment) — but the "monsters
+	 * fought" stat credit below is a one-time thing per encounter's roster,
+	 * guarded by `state.metOpponents`.
+	 *
 	 * @state The encounter's full mutable game state struct.
 	 */
 	function rollForInitiative( state ) {
@@ -600,11 +622,17 @@ class singleton {
 		// "Fought" is counted per encounter, not per kill — every opponent in
 		// this fight's roster, win or lose, the moment combat actually starts —
 		// and every living party member takes credit, not just whoever's active.
+		if ( !( structKeyExists( arguments.state, "metOpponents" ) && arguments.state.metOpponents ) ) {
+			arguments.state.metOpponents = true;
+			for ( var member in arguments.state.players ) {
+				variables.progression.incrementCharacterStat( member.characterId, "monsters_fought", opponents.len() );
+				member.monstersFought = ( structKeyExists( member, "monstersFought" ) ? member.monstersFought : 0 ) + opponents.len();
+			}
+		}
+
 		var bestPlayerRoll = "";
 		var fastestPlayerName = "";
 		for ( var member in arguments.state.players ) {
-			variables.progression.incrementCharacterStat( member.characterId, "monsters_fought", opponents.len() );
-			member.monstersFought = ( structKeyExists( member, "monstersFought" ) ? member.monstersFought : 0 ) + opponents.len();
 			var r = variables.actions.rollInitiative( member );
 			if ( !isNumeric( bestPlayerRoll ) || r > bestPlayerRoll ) {
 				bestPlayerRoll = r;
