@@ -160,6 +160,7 @@ class singleton {
 	function castCantrip( state, name = "" ) { return variables.actions.castCantrip( argumentCollection = arguments ); }
 	function castLeveledSpell( state, name = "", healTarget = javaCast( "null", 0 ) ) { return variables.actions.castLeveledSpell( argumentCollection = arguments ); }
 	function rollDeathSave( state ) { return variables.actions.rollDeathSave( argumentCollection = arguments ); }
+	function handlePartyMemberDeath( state, member ) { return variables.actions.handlePartyMemberDeath( argumentCollection = arguments ); }
 	function rollInitiative( combatant ) { return variables.actions.rollInitiative( argumentCollection = arguments ); }
 
 	// ── Delegators: EnemyAIService ────────────────────────────────────────────

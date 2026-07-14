@@ -446,6 +446,11 @@ class extends="modules.socketbox.models.WebSocketCore" {
 		}
 		var diceCount = val( arguments.data.diceCount ?: 1 );
 		for ( var member in arguments.state.players ) {
+			// A dead member (3 failed death saves this encounter) doesn't
+			// benefit from rests — no hit dice, no revival.
+			if ( structKeyExists( member, "isDead" ) && member.isDead ) {
+				continue;
+			}
 			var maxDice = max( 0, member.hitDiceMax - member.hitDiceSpent );
 			var memberDiceCount = max( 0, min( diceCount, maxDice ) );
 			var result = arguments.combatService.shortRest( member, memberDiceCount );
@@ -464,6 +469,9 @@ class extends="modules.socketbox.models.WebSocketCore" {
 			return;
 		}
 		for ( var member in arguments.state.players ) {
+			if ( structKeyExists( member, "isDead" ) && member.isDead ) {
+				continue;
+			}
 			var result = arguments.combatService.longRest( member );
 			if ( !result.success ) {
 				arguments.state.log.prepend( "#member.name# can't take another Long Rest yet — about #result.hoursUntilNext# more hour#( result.hoursUntilNext == 1 ? '' : 's' )# of in-game time needed." );

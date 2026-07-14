@@ -3115,6 +3115,61 @@ class extends="testbox.system.BaseSpec" {
 				} );
 			} );
 
+			describe( "handlePartyMemberDeath()", () => {
+				// characterId 0 matches no real row, so the deaths-stat UPDATE
+				// inside is a harmless no-op — same fixture convention as the
+				// spell tests above.
+				var makePartyState = () => {
+					var first  = makeCombatant( 1, 1, { "characterId": 0, "name": "First", "movementRemaining": 6, "actionUsed": false, "bonusActionUsed": false, "attacksUsedThisTurn": 0 } );
+					var second = makeCombatant( 2, 1, { "characterId": 0, "name": "Second", "movementRemaining": 6, "actionUsed": false, "bonusActionUsed": false, "attacksUsedThisTurn": 0 } );
+					return {
+						"player": first, "players": [ first, second ], "activePlayerIndex": 1,
+						"opponents": [], "log": [], "gameOver": false, "outcome": "",
+						"movementRemaining": 6, "actionUsed": false, "bonusActionUsed": false, "attacksUsedThisTurn": 0
+					};
+				};
+
+				it( "does not end the encounter while another member still lives", () => {
+					var state = makePartyState();
+					service.handlePartyMemberDeath( state, state.players[ 2 ] );
+					expect( state.players[ 2 ].isDead ).toBeTrue();
+					expect( state.gameOver ).toBeFalse();
+					expect( state.outcome ).toBe( "" );
+				} );
+
+				it( "auto-switches control to a survivor when the active member dies", () => {
+					var state = makePartyState();
+					service.handlePartyMemberDeath( state, state.players[ 1 ] );
+					expect( state.gameOver ).toBeFalse();
+					expect( state.activePlayerIndex ).toBe( 2 );
+					expect( state.player.name ).toBe( "Second" );
+				} );
+
+				it( "ends in defeat only once the last member dies", () => {
+					var state = makePartyState();
+					service.handlePartyMemberDeath( state, state.players[ 2 ] );
+					expect( state.gameOver ).toBeFalse();
+					service.handlePartyMemberDeath( state, state.players[ 1 ] );
+					expect( state.gameOver ).toBeTrue();
+					expect( state.outcome ).toBe( "defeat" );
+				} );
+			} );
+
+			describe( "switchActivePlayer() with a dead member", () => {
+				it( "refuses to make a dead member active", () => {
+					var first  = makeCombatant( 1, 1, { "characterId": 0, "name": "First", "movementRemaining": 6, "actionUsed": false, "bonusActionUsed": false, "attacksUsedThisTurn": 0 } );
+					var second = makeCombatant( 2, 1, { "characterId": 0, "name": "Second", "isDead": true, "hitPoints": 0, "movementRemaining": 0, "actionUsed": false, "bonusActionUsed": false, "attacksUsedThisTurn": 0 } );
+					var state = {
+						"player": first, "players": [ first, second ], "activePlayerIndex": 1,
+						"opponents": [], "log": [], "gameOver": false, "outcome": "",
+						"movementRemaining": 6, "actionUsed": false, "bonusActionUsed": false, "attacksUsedThisTurn": 0
+					};
+					service.switchActivePlayer( state, 2 );
+					expect( state.activePlayerIndex ).toBe( 1 );
+					expect( state.player.name ).toBe( "First" );
+				} );
+			} );
+
 		} );
 	}
 

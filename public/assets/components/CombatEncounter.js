@@ -227,14 +227,14 @@ const CombatEncounter = {
 						>
 							<h2 class="fantasy-heading">{{ member.name }}{{ (memberIdx+1) === cs.activePlayerIndex ? ' ⚔' : '' }}</h2>
 							<button
-								v-if="partyMembers.length > 1"
+								v-if="partyMembers.length > 1 && !member.isDead"
 								type="button"
 								class="btn btn-sm heal-target-toggle"
 								:class="{ 'heal-target-toggle-active': isHealTarget(memberIdx+1) }"
 								:title="'Target ' + member.name + ' for healing spells'"
 								@click.stop="healTargetIndex = memberIdx+1"
 							>💚 {{ isHealTarget(memberIdx+1) ? 'Heal target' : 'Target for heal' }}</button>
-							<p class="stat-subtitle">Level {{ member.level }} {{ member.class }}{{ member.hitPoints <= 0 ? ' — Unconscious' : (foeBloodied(member) ? ' — Bloodied' : '') }}</p>
+							<p class="stat-subtitle">Level {{ member.level }} {{ member.class }}{{ member.isDead ? ' — Dead' : (member.hitPoints <= 0 ? ' — Unconscious' : (foeBloodied(member) ? ' — Bloodied' : '')) }}</p>
 							<div class="hp-bar"><div :class="['hp-bar-fill', foeBloodied(member) ? 'hp-bar-fill-bloodied' : '']" :style="{ width: Math.max(0, member.hitPoints) / member.maxHitPoints * 100 + '%' }"></div></div>
 							<div v-if="member.nextLevelXp > 0" class="xp-row xp-row-sm" :title="member.experiencePoints + ' / ' + member.nextLevelXp + ' XP'">
 								<div class="xp-bar xp-bar-sm"><div class="xp-bar-fill" :style="{ width: xpPercent(member) + '%' }"></div></div>
@@ -651,6 +651,7 @@ const CombatEncounter = {
 			const partyIdx = partyIndexAt( x, y );
 			if ( partyIdx ) {
 				const member = partyMembers.value[ partyIdx - 1 ];
+				if ( member.isDead ) return member.name + " (dead)";
 				return partyIdx === cs.activePlayerIndex ? member.name : member.name + " (click to make active)";
 			}
 			const foe = opponentAt( x, y );
@@ -663,7 +664,9 @@ const CombatEncounter = {
 
 		function tileEmoji( x, y ) {
 			const partyIdx = partyIndexAt( x, y );
-			if ( partyIdx ) return partyLabels.value[ partyIdx - 1 ];
+			if ( partyIdx ) {
+				return partyMembers.value[ partyIdx - 1 ].isDead ? "💀" : partyLabels.value[ partyIdx - 1 ];
+			}
 			const foe = opponentAt( x, y );
 			if ( foe ) return "☠";
 			const poi = poiTypeAt( x, y );

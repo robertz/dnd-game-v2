@@ -125,6 +125,8 @@ class singleton {
 	 * opponent with no target at all once the only member they'd perceived
 	 * went down, making them do nothing for the rest of the fight instead
 	 * of finishing the job or reassessing once someone else comes into view.
+	 * A DEAD member (3 failed death saves, `isDead`) is different — there's
+	 * nothing left to finish off, so they're excluded outright.
 	 *
 	 * @state The encounter's full mutable game state struct.
 	 * @opponent The opponent choosing a target.
@@ -135,7 +137,12 @@ class singleton {
 			arguments.opponent.aware = false;
 		}
 
-		var living = arguments.state.players;
+		var living = [];
+		for ( var candidate in arguments.state.players ) {
+			if ( !( structKeyExists( candidate, "isDead" ) && candidate.isDead ) ) {
+				living.append( candidate );
+			}
+		}
 		if ( living.len() == 0 ) {
 			return javaCast( "null", 0 );
 		}

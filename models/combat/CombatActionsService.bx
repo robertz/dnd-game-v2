@@ -33,6 +33,12 @@ class singleton {
 		if ( arguments.newIndex < 1 || arguments.newIndex > arguments.state.players.len() || arguments.newIndex == arguments.state.activePlayerIndex ) {
 			return;
 		}
+		// A dying (0 HP) member stays selectable — they need to be active to
+		// roll their own death saves — but a dead one has nothing left to do.
+		var incomingMember = arguments.state.players[ arguments.newIndex ];
+		if ( structKeyExists( incomingMember, "isDead" ) && incomingMember.isDead ) {
+			return;
+		}
 		var outgoing = arguments.state.players[ arguments.state.activePlayerIndex ];
 		outgoing.movementRemaining   = arguments.state.movementRemaining;
 		outgoing.actionUsed          = arguments.state.actionUsed;
@@ -2019,6 +2025,10 @@ class singleton {
 	 * rollDeathSave().
 	 */
 	private function _castHealSpell( state, attacker, target, spellName, resourceNote, diceCount, diceSides, extraDiceCount = 0, extraDiceSides = 0 ) {
+		if ( structKeyExists( arguments.target, "isDead" ) && arguments.target.isDead ) {
+			arguments.state.log.prepend( "#arguments.attacker.name# casts #arguments.spellName##arguments.resourceNote# on #arguments.target.name#, but they are beyond healing." );
+			return;
+		}
 		var healing = variables.dice.rollSum( arguments.diceCount, arguments.diceSides )
 			+ ( arguments.extraDiceCount > 0 ? variables.dice.rollSum( arguments.extraDiceCount, arguments.extraDiceSides ) : 0 )
 			+ arguments.attacker.modifiers[ arguments.attacker.spellcastingAbility ];
@@ -2051,6 +2061,9 @@ class singleton {
 	private function _castMassHealSpell( state, attacker, spellName, resourceNote, diceCount, diceSides, radiusSquares, extraDiceCount = 0, extraDiceSides = 0 ) {
 		var healedNotes = [];
 		for ( var member in arguments.state.players ) {
+			if ( structKeyExists( member, "isDead" ) && member.isDead ) {
+				continue;
+			}
 			if ( variables.grid.chebyshev( arguments.attacker, member ) > arguments.radiusSquares ) {
 				continue;
 			}
@@ -2158,8 +2171,9 @@ class singleton {
 	 * been struck again — an Unconscious creature auto-fails Dex saves and
 	 * takes no roll-to-hit, so this skips normal attack resolution entirely.
 	 * Counts as 2 failures (an automatic critical) if `attacker` is within 5
-	 * feet, 1 otherwise, per the "Unconscious"/critical-hit-range rules. Ends
-	 * the encounter in defeat once failures reach 3.
+	 * feet, 1 otherwise, per the "Unconscious"/critical-hit-range rules. Once
+	 * failures reach 3 the member dies — see handlePartyMemberDeath() for
+	 * how that only becomes a defeat once the whole party is gone.
 	 *
 	 * @state The encounter's full mutable game state struct.
 	 * @attacker The opponent striking the downed player.
@@ -2178,12 +2192,47 @@ class singleton {
 			"#arguments.attacker.name# strikes the unconscious #arguments.defender.name#: #failures# failed death save#( failures > 1 ? 's' : '' )#!"
 		);
 		if ( arguments.defender.deathSaveFailures >= 3 ) {
-			arguments.defender.isDying = false;
+			handlePartyMemberDeath( arguments.state, arguments.defender );
+		}
+	}
+
+	/**
+	 * One party member has died for good (3 failed death saves). The
+	 * encounter only ends in defeat once EVERY member is dead — otherwise
+	 * the fight continues with the survivors: the fallen member is marked
+	 * `isDead` (excluded from enemy targeting, healing, and turn economy)
+	 * and, if they were the active member, control auto-switches to the
+	 * first survivor so the client isn't left driving a corpse.
+	 *
+	 * @state The encounter's full mutable game state struct.
+	 * @member The party member who just died.
+	 */
+	function handlePartyMemberDeath( state, member ) {
+		arguments.member.isDying  = false;
+		arguments.member.isStable = false;
+		arguments.member.isDead   = true;
+		variables.progression.incrementCharacterStat( arguments.member.characterId, "deaths" );
+		arguments.member.deaths = ( structKeyExists( arguments.member, "deaths" ) ? arguments.member.deaths : 0 ) + 1;
+		arguments.state.log.prepend( "#arguments.member.name# dies." );
+
+		var firstLivingIndex = 0;
+		for ( var i = 1; i <= arguments.state.players.len(); i++ ) {
+			var candidate = arguments.state.players[ i ];
+			if ( !( structKeyExists( candidate, "isDead" ) && candidate.isDead ) ) {
+				firstLivingIndex = i;
+				break;
+			}
+		}
+
+		if ( firstLivingIndex == 0 ) {
 			arguments.state.gameOver = true;
 			arguments.state.outcome = "defeat";
-			variables.progression.incrementCharacterStat( arguments.defender.characterId, "deaths" );
-			arguments.defender.deaths = ( structKeyExists( arguments.defender, "deaths" ) ? arguments.defender.deaths : 0 ) + 1;
-			arguments.state.log.prepend( "#arguments.defender.name# dies." );
+			arguments.state.log.prepend( "The last of the party falls. Defeat." );
+			return;
+		}
+
+		if ( arguments.state.players[ arguments.state.activePlayerIndex ].characterId == arguments.member.characterId ) {
+			switchActivePlayer( arguments.state, firstLivingIndex );
 		}
 	}
 
@@ -2193,7 +2242,8 @@ class singleton {
 	 * ends the dying state outright, 10+ is a success, 2-9 is a failure, and a
 	 * natural 1 counts as 2 failures. 3 successes stabilizes the player
 	 * (unconscious but no longer in danger of dying on their own); 3 failures
-	 * ends the encounter in defeat. A no-op if the player isn't dying.
+	 * kills the member — a defeat only if they were the last one standing
+	 * (see handlePartyMemberDeath()). A no-op if the player isn't dying.
 	 *
 	 * @state The encounter's full mutable game state struct.
 	 */
@@ -2239,11 +2289,7 @@ class singleton {
 			player.isStable = true;
 			arguments.state.log.prepend( "#player.name# stabilizes, unconscious but stable." );
 		} else if ( player.deathSaveFailures >= 3 ) {
-			arguments.state.gameOver = true;
-			arguments.state.outcome = "defeat";
-			variables.progression.incrementCharacterStat( player.characterId, "deaths" );
-			player.deaths = ( structKeyExists( player, "deaths" ) ? player.deaths : 0 ) + 1;
-			arguments.state.log.prepend( "#player.name# dies." );
+			handlePartyMemberDeath( arguments.state, player );
 		}
 	}
 
