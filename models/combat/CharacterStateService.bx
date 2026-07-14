@@ -319,6 +319,21 @@ class singleton {
 			// variables.spellcasting.assignSpellcasting(), which no longer touches this field).
 			"usedMagicInitiateSpell": row.used_magic_initiate_spell[ 1 ] == 1,
 			"isRaging": false,
+			// Always present (not just added on the fly when it first
+			// matters, like isRaging above) — the WebSocket broadcast's
+			// per-key player diff (_playerDelta() in WebSocket.bx) can only
+			// detect and propagate a key clearing back to false/0 if every
+			// party member's struct already has it, even a member who's
+			// never been downed. Otherwise switching active control onto a
+			// member who's never had these keys leaves the client's cached
+			// values from whoever was previously active stuck in place —
+			// e.g. a "Make Death Saving Throw" prompt outliving the death
+			// that triggered it, stuck on the next active (living) member.
+			"isDying": false,
+			"isStable": false,
+			"isDead": false,
+			"deathSaveSuccesses": 0,
+			"deathSaveFailures": 0,
 			"features": [],
 			"feats": [],
 			"inventory": [],

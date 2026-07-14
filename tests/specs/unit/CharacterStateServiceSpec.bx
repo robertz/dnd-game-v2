@@ -1,0 +1,63 @@
+/**
+ * Unit tests for app/models/combat/CharacterStateService.bx — currently
+ * just loadCharacter()'s death-tracking fields. Same throwaway-DB-fixture
+ * approach as CharacterServiceSpec (no separate test datasource).
+ */
+class extends="testbox.system.BaseSpec" {
+
+	function beforeAll(){
+		variables.characterService = new models.CharacterService();
+		variables.combatService    = new models.CombatService();
+
+		queryExecute(
+			"INSERT INTO users (username, password_hash) VALUES (:username, 'x')",
+			{ "username": "ts_owner_#left( createUUID(), 8 )#" },
+			{ datasource: "gameserver", result: "variables.ownerResult" }
+		);
+		variables.ownerUserId = ownerResult.generatedKey;
+
+		variables.characterId = characterService.createCharacter(
+			ownerUserId = variables.ownerUserId,
+			name        = "Test Loadme",
+			classId     = 1,
+			str = 10, dex = 10, con = 10, intScore = 10, wis = 10, cha = 10
+		);
+	}
+
+	function afterAll(){
+		characterService.deleteCharacter( characterId = variables.characterId, ownerUserId = variables.ownerUserId );
+		queryExecute(
+			"DELETE FROM users WHERE id = :id",
+			{ "id": variables.ownerUserId },
+			{ datasource: "gameserver" }
+		);
+	}
+
+	function run(){
+		describe( "loadCharacter()", () => {
+			// Regression: WebSocket.bx's _playerDelta() sends only the
+			// player fields that changed since the last broadcast, keyed by
+			// name — a key that's simply absent from a struct (rather than
+			// present with a false/0 default) can never be included in that
+			// diff, so switching the active party member onto someone who's
+			// never had e.g. isDying set could leave the client showing
+			// stale state (a "Make Death Saving Throw" prompt) carried over
+			// from whoever was previously active and just died. These
+			// fields must always be present so they're always diffable.
+			it( "always includes the death-tracking fields, even for a character who's never been downed", () => {
+				var player = combatService.loadCharacter( variables.characterId );
+				expect( player ).toHaveKey( "isDying" );
+				expect( player ).toHaveKey( "isStable" );
+				expect( player ).toHaveKey( "isDead" );
+				expect( player ).toHaveKey( "deathSaveSuccesses" );
+				expect( player ).toHaveKey( "deathSaveFailures" );
+				expect( player.isDying ).toBeFalse();
+				expect( player.isStable ).toBeFalse();
+				expect( player.isDead ).toBeFalse();
+				expect( player.deathSaveSuccesses ).toBe( 0 );
+				expect( player.deathSaveFailures ).toBe( 0 );
+			} );
+		} );
+	}
+
+}
