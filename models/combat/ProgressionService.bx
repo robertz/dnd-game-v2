@@ -364,7 +364,14 @@ class singleton {
 		var hitPointsPerLevel = variables.rules.fixedHitPointsPerLevel( levelingClass.hitDie );
 		var hpGain = max( 1, hitPointsPerLevel + player.modifiers.con ) + hpBonusPerLevel;
 		player.maxHitPoints += hpGain;
-		player.hitPoints += hpGain;
+		// A dead member's hitPoints must stay at 0 — the XP that triggered
+		// this level-up is still owed to them (see awardPartyExperience()'s
+		// "everyone present splits it" rule), but bumping hitPoints here
+		// would desync it from isDead for the rest of this encounter, e.g.
+		// a "Dead" card showing a non-zero HP bar with no disabled styling.
+		if ( !( structKeyExists( player, "isDead" ) && player.isDead ) ) {
+			player.hitPoints += hpGain;
+		}
 
 		var newProficiencyBonus = variables.rules.proficiencyBonusForLevel( player.totalLevel );
 		var proficiencyIncreased = ( newProficiencyBonus > player.proficiencyBonus );

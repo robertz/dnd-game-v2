@@ -221,7 +221,7 @@ const CombatEncounter = {
 				<div class="combatants">
 					<template v-for="(member, memberIdx) in partyMembers" :key="member.characterId || memberIdx">
 						<div
-							:class="['stat-card','stat-card-player', partyMembers.length > 1 ? partyColorClass(memberIdx+1) : '', member.hitPoints <= 0 ? 'stat-card-down' : '', (memberIdx+1) === cs.activePlayerIndex ? 'stat-card-active' : '']"
+							:class="['stat-card','stat-card-player', partyMembers.length > 1 ? partyColorClass(memberIdx+1) : '', (member.isDead || member.hitPoints <= 0) ? 'stat-card-down' : '', (memberIdx+1) === cs.activePlayerIndex ? 'stat-card-active' : '']"
 							:title="partyMembers.length > 1 ? 'Make ' + member.name + ' the active character' : ''"
 							@click="selectActiveCharacter(memberIdx+1)"
 						>
@@ -586,9 +586,14 @@ const CombatEncounter = {
 		}
 
 		function partyIndexAt( x, y ) {
+			// Deliberately no hitPoints filter — a downed or dead party member
+			// stays exactly where they fell (see CombatActionsService.bx, which
+			// never clears .position on death) and must still be locatable here
+			// so tileEmoji()/tileTitle() can render their 💀 marker instead of
+			// the tile silently looking empty.
 			for ( let i = 0; i < partyMembers.value.length; i++ ) {
 				const p = partyMembers.value[ i ];
-				if ( p.hitPoints > 0 && p.position && p.position.x === x && p.position.y === y ) return i + 1;
+				if ( p.position && p.position.x === x && p.position.y === y ) return i + 1;
 			}
 			return 0;
 		}
