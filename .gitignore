@@ -4,3 +4,4 @@ runtime/classes/
 *.class
 modules/
 testbox/
+.claude/
