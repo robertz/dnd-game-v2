@@ -313,6 +313,21 @@ function createReconnectingSocket( url ) {
 			// backlog of stale clicks once it eventually reconnects — drop the
 			// oldest first, keeping the most recent (most likely still-relevant) actions.
 			if ( sendQueue.length > MAX_QUEUED ) sendQueue.shift();
+		},
+		// The server binds a connection to whatever session.userId existed at
+		// WS handshake time (see WebSocket.bx onConnect) — and login rotates
+		// the session ID on top of that. A socket opened on the login screen
+		// is therefore permanently anonymous: every combat action bounces off
+		// the encounter-ownership check as "Unauthorized" and the whole UI
+		// looks frozen until a page reload. Auth.js calls this right after a
+		// successful login/register so the connection is re-established under
+		// the authenticated session, without the backoff delay a real drop gets.
+		reconnect() {
+			attempts = 0;
+			const old = ws;
+			old.onclose = null;
+			try { old.close(); } catch ( e ) { /* already closed */ }
+			connect();
 		}
 	};
 }

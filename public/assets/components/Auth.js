@@ -90,6 +90,7 @@ const Auth = {
 	setup() {
 		const api      = inject( "api" );
 		const setUser  = inject( "setCurrentUser" );
+		const socket   = inject( "socket" );
 		const router   = VueRouter.useRouter();
 		const mode     = ref( "login" );
 		const username = ref( "" );
@@ -124,6 +125,11 @@ const Auth = {
 					return;
 				}
 				setUser( result );
+				// The WebSocket connected while this session was anonymous (and
+				// login just rotated the session ID) — reconnect it now so the
+				// server re-binds the channel to the authenticated user, or every
+				// combat action would be rejected as Unauthorized until a reload.
+				socket.reconnect();
 				router.push( "/" );
 			} catch ( e ) {
 				formError.value = "Could not reach the server.";

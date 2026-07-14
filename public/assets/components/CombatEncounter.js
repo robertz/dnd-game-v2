@@ -389,6 +389,12 @@ const CombatEncounter = {
 					mapHeight.value = msg.mapHeight ?? mapHeight.value;
 					mapPois.value   = msg.gridPois  ?? [];
 				}
+			} else if ( msg.type === "error" ) {
+				// A rejected action ("Unauthorized", "No active encounter", ...)
+				// otherwise looks identical to a dead button — put it where the
+				// player is already looking instead of dropping it on the floor.
+				cs.log = [ "⚠ " + msg.message, ...cs.log ];
+				console.warn( "Combat action rejected:", msg.message );
 			}
 		}
 		socket.addEventListener( "message", onSocketMessage );
