@@ -1,0 +1,112 @@
+/**
+ * Unit tests for app/models/combat/EnemyAIService.bx — currently just
+ * updateCombatState()'s party-wide visibility/rest gating (extracted from
+ * WebSocket.bx so it could be tested at all; the socket handler itself
+ * can't be instantiated outside the servlet).
+ *
+ * Instantiated via CombatService (no ColdBox bootstrap), same as
+ * CombatServiceSpec. Fixtures set initiativeRolled=true and leave
+ * movement remaining so updateCombatState()'s initiative/turn-end side
+ * paths stay out of the way — these tests are about who can see whom.
+ */
+class extends="testbox.system.BaseSpec" {
+
+	function beforeAll(){
+		variables.service = new models.CombatService();
+	}
+
+	/**
+	 * A 7x7 grid, all floor except a full-height wall column at x=4 —
+	 * splitting the map into a left and a right half with no sightline
+	 * between them.
+	 */
+	private function makeSplitGrid(){
+		var tiles = [];
+		for ( var y = 1; y <= 7; y++ ) {
+			var row = [];
+			for ( var x = 1; x <= 7; x++ ) {
+				arrayAppend( row, x == 4 ? "wall" : "floor" );
+			}
+			arrayAppend( tiles, row );
+		}
+		return { "width": 7, "height": 7, "tiles": tiles };
+	}
+
+	private function makeMember( x, y ){
+		return { "name": "Member", "position": { "x": arguments.x, "y": arguments.y }, "inCombat": false, "hitPoints": 10, "maxHitPoints": 10 };
+	}
+
+	private function makeOpponent( x, y, hitPoints = 10 ){
+		return { "name": "Mob", "position": { "x": arguments.x, "y": arguments.y }, "hitPoints": arguments.hitPoints, "visible": false };
+	}
+
+	private function makeState( players, opponents ){
+		return {
+			"gameOver": false,
+			"outcome": "",
+			"players": arguments.players,
+			"player": arguments.players[ 1 ],
+			"opponents": arguments.opponents,
+			"map": makeSplitGrid(),
+			"initiativeRolled": true,
+			"movementRemaining": 6,
+			"currentTurn": "player",
+			"log": []
+		};
+	}
+
+	function run(){
+		describe( "updateCombatState()", () => {
+
+			it( "marks a mob visible and the party in combat when the active member sees it", () => {
+				var state = makeState( [ makeMember( 2, 2 ) ], [ makeOpponent( 2, 5 ) ] );
+				service.updateCombatState( state );
+				expect( state.opponents[ 1 ].visible ).toBeTrue();
+				expect( state.players[ 1 ].inCombat ).toBeTrue();
+			} );
+
+			it( "keeps the party in combat when only a non-active member is seen", () => {
+				// Active member hides on the left half; second member stands on
+				// the right half with the mob — the wall blocks the active
+				// member's own sightline entirely.
+				var state = makeState(
+					[ makeMember( 2, 2 ), makeMember( 6, 2 ) ],
+					[ makeOpponent( 6, 5 ) ]
+				);
+				service.updateCombatState( state );
+				expect( state.opponents[ 1 ].visible ).toBeTrue();
+				expect( state.players[ 1 ].inCombat ).toBeTrue( "active member must be inCombat even though only the other member is exposed" );
+				expect( state.players[ 2 ].inCombat ).toBeTrue();
+			} );
+
+			it( "clears inCombat when the wall hides the whole party", () => {
+				var state = makeState(
+					[ makeMember( 2, 2 ), makeMember( 2, 6 ) ],
+					[ makeOpponent( 6, 4 ) ]
+				);
+				service.updateCombatState( state );
+				expect( state.opponents[ 1 ].visible ).toBeFalse();
+				expect( state.players[ 1 ].inCombat ).toBeFalse();
+				expect( state.players[ 2 ].inCombat ).toBeFalse();
+			} );
+
+			it( "keeps a dead mob visible without putting the party in combat", () => {
+				var state = makeState( [ makeMember( 2, 2 ) ], [ makeOpponent( 6, 4, 0 ) ] );
+				service.updateCombatState( state );
+				expect( state.opponents[ 1 ].visible ).toBeTrue();
+				expect( state.players[ 1 ].inCombat ).toBeFalse();
+			} );
+
+			it( "clears every member's inCombat once the game is over", () => {
+				var state = makeState( [ makeMember( 2, 2 ), makeMember( 2, 3 ) ], [ makeOpponent( 2, 5 ) ] );
+				state.players[ 1 ].inCombat = true;
+				state.players[ 2 ].inCombat = true;
+				state.gameOver = true;
+				service.updateCombatState( state );
+				expect( state.players[ 1 ].inCombat ).toBeFalse();
+				expect( state.players[ 2 ].inCombat ).toBeFalse();
+			} );
+		} );
+	}
+
+}

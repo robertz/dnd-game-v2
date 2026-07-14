@@ -166,6 +166,7 @@ class singleton {
 	function endPlayerTurn( state ) { return variables.enemyAI.endPlayerTurn( argumentCollection = arguments ); }
 	function runEnemyTurn( state ) { return variables.enemyAI.runEnemyTurn( argumentCollection = arguments ); }
 	function rollForInitiative( state ) { return variables.enemyAI.rollForInitiative( argumentCollection = arguments ); }
+	function updateCombatState( state ) { return variables.enemyAI.updateCombatState( argumentCollection = arguments ); }
 	function useSecondWind( state ) { return variables.actions.useSecondWind( argumentCollection = arguments ); }
 	function startRage( state ) { return variables.actions.startRage( argumentCollection = arguments ); }
 	function endRage( state ) { return variables.actions.endRage( argumentCollection = arguments ); }

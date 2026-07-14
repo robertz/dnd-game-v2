@@ -190,8 +190,10 @@ const CombatEncounter = {
 				</div>
 
 				<!-- Rest bar — shown while exploring, and mid-encounter whenever no
-				     mob is aware of the player (canRest tracks player.inCombat,
-				     which the server clears once nothing has sight of you) -->
+				     mob has sight of any party member (canRest tracks
+				     player.inCombat, which the server clears once nothing has
+				     line of sight to anyone in the party — see
+				     EnemyAIService.updateCombatState()) -->
 				<div v-if="!cs.gameOver && canRest" class="turn-actions rest-bar">
 					<span class="stat-subtitle">{{ gameClockLabel }}</span>
 					<span class="stat-subtitle">HD:

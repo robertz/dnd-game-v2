@@ -205,7 +205,7 @@ class extends="modules.socketbox.models.WebSocketCore" {
 		arguments.state.log.prepend( "#player.name# moves to (#px#, #py#)." );
 
 		arguments.combatService.checkOpportunityAttacks( arguments.state, player, true, startPosition );
-		_updateCombatState( arguments.state, arguments.combatService );
+		arguments.combatService.updateCombatState( arguments.state );
 		_checkLoot( arguments.state, arguments.characterService, arguments.mapService );
 		_checkMapTransition( arguments.state, arguments.mapService, arguments.combatService );
 	}
@@ -439,8 +439,8 @@ class extends="modules.socketbox.models.WebSocketCore" {
 
 	private function _handleShortRest( state, data, combatService ) {
 		// member.inCombat is set uniformly across the whole party by
-		// _updateCombatState() — checking the active player's flag is
-		// equivalent to checking any member's.
+		// EnemyAIService.updateCombatState() — checking the active player's
+		// flag is equivalent to checking any member's.
 		if ( structKeyExists( arguments.state.player, "inCombat" ) && arguments.state.player.inCombat ) {
 			return;
 		}
@@ -470,39 +470,6 @@ class extends="modules.socketbox.models.WebSocketCore" {
 			} else {
 				arguments.state.log.prepend( "#member.name# takes a Long Rest — fully restored (#member.maxHitPoints#/#member.maxHitPoints# HP). All spell slots and other resources recovered." );
 			}
-		}
-	}
-
-	private function _updateCombatState( state, combatService ) {
-		if ( arguments.state.gameOver ) {
-			for ( var member in arguments.state.players ) {
-				member.inCombat = false;
-			}
-			return;
-		}
-		var player      = arguments.state.player;
-		var nowInCombat = false;
-		for ( var opp in arguments.state.opponents ) {
-			opp.visible = ( opp.hitPoints <= 0 ) || arguments.combatService.hasLineOfSight( arguments.state.map, opp.position, player.position );
-			if ( opp.hitPoints > 0 && opp.visible ) {
-				nowInCombat = true;
-			}
-		}
-		for ( var member in arguments.state.players ) {
-			member.inCombat = nowInCombat;
-		}
-
-		if ( nowInCombat && !arguments.state.initiativeRolled ) {
-			arguments.state.initiativeRolled = true;
-			arguments.combatService.rollForInitiative( arguments.state );
-			return;
-		}
-		// Out of combat, exhausting movement still ends the round via
-		// endPlayerTurn() — even before initiative — so every mob on the map
-		// takes its converge-on-the-player turn from the moment the map starts,
-		// not only once one becomes visible.
-		if ( !nowInCombat && arguments.state.movementRemaining <= 0 && arguments.state.currentTurn == "player" ) {
-			arguments.combatService.endPlayerTurn( arguments.state );
 		}
 	}
 

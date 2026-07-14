@@ -31,6 +31,59 @@ class singleton {
 	}
 
 	/**
+	 * Recomputes encounter visibility and combat awareness after any player
+	 * action: marks each opponent visible if any party member has line of
+	 * sight to it (or it's dead — corpses stay revealed), sets every
+	 * member's `inCombat` flag (which gates the client's rest bar — resting
+	 * is only allowed while no living mob can see anyone in the party),
+	 * rolls initiative the moment combat starts, and, out of combat, ends
+	 * the round when the active member's movement is spent so unseen mobs
+	 * still take their converge-on-the-player turns.
+	 *
+	 * Visibility is party-wide, not active-member-only: a party spread
+	 * across the map (see CombatActionsService.switchActivePlayer()) can
+	 * leave a member exposed to a mob while the active member is tucked out
+	 * of sight — checking only `state.player` would let the rest bar appear
+	 * even though someone in the party is still being watched.
+	 *
+	 * @state The encounter's full mutable game state struct.
+	 */
+	function updateCombatState( state ) {
+		if ( arguments.state.gameOver ) {
+			for ( var member in arguments.state.players ) {
+				member.inCombat = false;
+			}
+			return;
+		}
+		var nowInCombat = false;
+		for ( var opp in arguments.state.opponents ) {
+			var seenByAnyMember = false;
+			for ( var member in arguments.state.players ) {
+				if ( variables.grid.hasLineOfSight( arguments.state.map, opp.position, member.position ) ) {
+					seenByAnyMember = true;
+					break;
+				}
+			}
+			opp.visible = ( opp.hitPoints <= 0 ) || seenByAnyMember;
+			if ( opp.hitPoints > 0 && opp.visible ) {
+				nowInCombat = true;
+			}
+		}
+		for ( var member in arguments.state.players ) {
+			member.inCombat = nowInCombat;
+		}
+
+		if ( nowInCombat && !arguments.state.initiativeRolled ) {
+			arguments.state.initiativeRolled = true;
+			rollForInitiative( arguments.state );
+			return;
+		}
+		if ( !nowInCombat && arguments.state.movementRemaining <= 0 && arguments.state.currentTurn == "player" ) {
+			endPlayerTurn( arguments.state );
+		}
+	}
+
+	/**
 	 * Hands control to the enemy, runs any legendary actions (see
 	 * _runLegendaryActions()), then resets for the next player turn.
 	 *
