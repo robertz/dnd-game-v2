@@ -23,7 +23,14 @@ const persistedEncounter = Vue.reactive( {
 	mapDecs: [],
 	mapWidth: 0,
 	mapHeight: 0,
-	mapPois: []
+	mapPois: [],
+	// Fog of war — exploredTiles accumulates for the life of the map (a tile
+	// never re-fogs once seen); visibleTiles is just this turn's currently-
+	// lit set, replaced whole on every update. Both are plain objects keyed
+	// "x,y" -> true, matching the server's shape so merging is a plain
+	// Object.assign (see applyStateUpdate()).
+	exploredTiles: {},
+	visibleTiles: {}
 } );
 
 const CombatEncounter = {
@@ -300,7 +307,7 @@ const CombatEncounter = {
 		const apiCall   = inject( "api" );
 
 		const loading = ref( true );
-		const { encounterKey, mapLoaded, mapTiles, mapDecs, mapWidth, mapHeight, mapPois } = Vue.toRefs( persistedEncounter );
+		const { encounterKey, mapLoaded, mapTiles, mapDecs, mapWidth, mapHeight, mapPois, exploredTiles, visibleTiles } = Vue.toRefs( persistedEncounter );
 
 		const asiMode         = ref( "single" );
 		const asiAbility1     = ref( "str" );
@@ -360,11 +367,13 @@ const CombatEncounter = {
 				encounterKey.value = data.encounterKey;
 				applyStateUpdate( data );
 				baseClassCache.clear();
-				mapTiles.value  = data.mapTiles  ?? [];
-				mapDecs.value   = data.mapDecorations ?? [];
-				mapWidth.value  = data.mapWidth  ?? 0;
-				mapHeight.value = data.mapHeight ?? 0;
-				mapPois.value   = data.mapPois   ?? [];
+				mapTiles.value      = data.mapTiles  ?? [];
+				mapDecs.value       = data.mapDecorations ?? [];
+				mapWidth.value      = data.mapWidth  ?? 0;
+				mapHeight.value     = data.mapHeight ?? 0;
+				mapPois.value       = data.mapPois   ?? [];
+				exploredTiles.value = data.exploredTiles ?? {};
+				visibleTiles.value  = data.visibleTiles  ?? {};
 				mapLoaded.value = true;
 			} catch ( e ) {
 				console.error( "Failed to start combat", e );
@@ -388,7 +397,16 @@ const CombatEncounter = {
 					mapWidth.value  = msg.mapWidth  ?? mapWidth.value;
 					mapHeight.value = msg.mapHeight ?? mapHeight.value;
 					mapPois.value   = msg.gridPois  ?? [];
+					// A new map means the old fog is meaningless (different
+					// coordinate space) — the server resets exploredTiles and
+					// sends the fresh, already-small set whole via
+					// newlyExplored (see WebSocket.bx's _buildBroadcast), so
+					// replace rather than merge here.
+					exploredTiles.value = { ...( msg.newlyExplored ?? {} ) };
+				} else if ( msg.newlyExplored ) {
+					Object.assign( exploredTiles.value, msg.newlyExplored );
 				}
+				if ( msg.visibleTiles ) visibleTiles.value = msg.visibleTiles;
 			} else if ( msg.type === "error" ) {
 				// A rejected action ("Unauthorized", "No active encounter", ...)
 				// otherwise looks identical to a dead button — put it where the
@@ -638,8 +656,24 @@ const CombatEncounter = {
 			return base;
 		}
 
+		// Fog of war: a tile the party has never seen renders as a blank,
+		// featureless "unexplored" square (no walls/decor/party/foe/POI —
+		// same "just don't render it" idea the viewport virtualization
+		// already uses for off-screen tiles, applied to "not yet seen"
+		// instead). One the party has explored but can't currently see
+		// keeps its remembered geometry/POIs but renders dimmed
+		// (.tile-fogged) — see game.css. Both sets are party-wide, merged
+		// server-side in EnemyAIService._updateExploredTiles().
+		function isExplored( x, y ) {
+			return !!exploredTiles.value[ x + "," + y ];
+		}
+		function isCurrentlyVisible( x, y ) {
+			return !!visibleTiles.value[ x + "," + y ];
+		}
+
 		function tileClass( x, y ) {
-			const base = baseTileClass( x, y );
+			if ( !isExplored( x, y ) ) return "tile tile-unexplored";
+			const base = baseTileClass( x, y ) + ( isCurrentlyVisible( x, y ) ? "" : " tile-fogged" );
 
 			const partyIdx = partyIndexAt( x, y );
 			if ( partyIdx ) {
@@ -659,6 +693,7 @@ const CombatEncounter = {
 		}
 
 		function tileTitle( x, y ) {
+			if ( !isExplored( x, y ) ) return "";
 			const partyIdx = partyIndexAt( x, y );
 			if ( partyIdx ) {
 				const member = partyMembers.value[ partyIdx - 1 ];
@@ -674,6 +709,7 @@ const CombatEncounter = {
 		}
 
 		function tileEmoji( x, y ) {
+			if ( !isExplored( x, y ) ) return "";
 			const partyIdx = partyIndexAt( x, y );
 			if ( partyIdx ) {
 				return partyMembers.value[ partyIdx - 1 ].isDead ? "💀" : partyLabels.value[ partyIdx - 1 ];

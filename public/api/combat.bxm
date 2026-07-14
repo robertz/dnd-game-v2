@@ -76,6 +76,12 @@
 			takenPositions.append( players[ i ].position );
 		}
 	}
+	// buildOpponentsForMap() below appends every placed mob's position onto
+	// takenPositions too (it doubles as the "don't place two mobs on the
+	// same tile" exclusion list) — snapshot the party-only positions now,
+	// before that happens, so the fog-of-war sweep never treats a monster's
+	// spawn point as something the party has "seen".
+	partyPositions = duplicate( takenPositions );
 
 	opponents = combatService.buildOpponentsForMap( map, averageLevel, takenPositions );
 
@@ -93,6 +99,12 @@
 		if ( opp.visible ) { anyVisible = true; }
 	}
 
+	// Fog of war's starting reveal — every living party member's own vision
+	// sweep, same rule EnemyAIService.updateCombatState() applies after every
+	// later action (see _updateExploredTiles() there).
+	visibleTiles  = combatService.visibleTilesFrom( map, partyPositions );
+	exploredTiles = duplicate( visibleTiles );
+
 	encounterKey = createUUID();
 
 	state = {
@@ -106,6 +118,8 @@
 		"moduleSlug"            : moduleSlug,
 		"mapSlug"               : mapSlug,
 		"gridPois"              : map.pois,
+		"visibleTiles"          : visibleTiles,
+		"exploredTiles"         : exploredTiles,
 		"items"                 : items,
 		"currentTurn"           : "player",
 		"round"                 : 1,
@@ -160,6 +174,8 @@
 		"mapTiles"              : map.tiles,
 		"mapDecorations"        : map.decorations,
 		"mapPois"               : map.pois,
+		"visibleTiles"          : state.visibleTiles,
+		"exploredTiles"         : state.exploredTiles,
 		"currentTurn"           : state.currentTurn,
 		"round"                 : state.round,
 		"movementRemaining"     : state.movementRemaining,

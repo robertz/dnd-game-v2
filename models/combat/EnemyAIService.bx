@@ -31,6 +31,44 @@ class singleton {
 	}
 
 	/**
+	 * Fog of war: recomputes which tiles the party can currently see (party-
+	 * wide, same "any member counts" rule as opponent visibility below) and
+	 * merges them into the encounter's permanent `exploredTiles` set — once
+	 * revealed, a tile stays revealed (dimmed once out of current sight, on
+	 * the client) rather than re-fogging as the party walks away. Runs on
+	 * every action alongside the opponent-visibility sweep so both use one
+	 * consistent snapshot of party positions.
+	 *
+	 * `visibleTiles` itself is small (bounded by GridService's sight cap) and
+	 * gets fully replaced every call — WebSocket.bx's broadcast sends it
+	 * whole every state_update rather than diffing it. `exploredTiles` only
+	 * grows, so the broadcast instead sends just the tiles newly added since
+	 * the last one (see _buildBroadcast()'s `newlyExplored`).
+	 */
+	private function _updateExploredTiles( state ) {
+		if ( !structKeyExists( arguments.state, "map" ) ) {
+			return;
+		}
+		var positions = [];
+		for ( var member in arguments.state.players ) {
+			if ( member.hitPoints > 0 ) {
+				arrayAppend( positions, member.position );
+			}
+		}
+		if ( positions.len() == 0 ) {
+			return;
+		}
+		var visible = variables.grid.visibleTilesFrom( arguments.state.map, positions );
+		arguments.state.visibleTiles = visible;
+		if ( !structKeyExists( arguments.state, "exploredTiles" ) ) {
+			arguments.state.exploredTiles = {};
+		}
+		for ( var key in visible ) {
+			arguments.state.exploredTiles[ key ] = true;
+		}
+	}
+
+	/**
 	 * Recomputes encounter visibility and combat awareness after any player
 	 * action: marks each opponent visible if any party member has line of
 	 * sight to it (or it's dead — corpses stay revealed), sets every
@@ -62,6 +100,7 @@ class singleton {
 	 * @state The encounter's full mutable game state struct.
 	 */
 	function updateCombatState( state ) {
+		_updateExploredTiles( arguments.state );
 		if ( arguments.state.gameOver ) {
 			for ( var member in arguments.state.players ) {
 				member.inCombat = false;

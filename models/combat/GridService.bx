@@ -554,6 +554,40 @@ class singleton {
 	}
 
 	/**
+	 * Every tile any of `positions` can currently see, for the map's fog of
+	 * war — one entry (key "x,y", value true) per visible tile, including
+	 * each position's own square. Bounded to a MAX_SIGHT_SQUARES box around
+	 * each position (same cap hasLineOfSight() itself enforces) rather than
+	 * sweeping the whole grid, so this stays cheap on a large map: at most
+	 * (2*MAX_SIGHT_SQUARES+1)^2 hasLineOfSight() calls per position, each a
+	 * short Bresenham trace.
+	 *
+	 * @grid A level grid (`{width, height, tiles}` + `decorations`), from MapService.
+	 * @positions Array of `{x, y}` — typically every living party member's position.
+	 */
+	function visibleTilesFrom( grid, positions ) {
+		var visible = {};
+		for ( var pos in arguments.positions ) {
+			var minX = max( 1, pos.x - MAX_SIGHT_SQUARES );
+			var maxX = min( arguments.grid.width, pos.x + MAX_SIGHT_SQUARES );
+			var minY = max( 1, pos.y - MAX_SIGHT_SQUARES );
+			var maxY = min( arguments.grid.height, pos.y + MAX_SIGHT_SQUARES );
+			for ( var ty = minY; ty <= maxY; ty++ ) {
+				for ( var tx = minX; tx <= maxX; tx++ ) {
+					var key = tx & "," & ty;
+					if ( structKeyExists( visible, key ) ) {
+						continue;
+					}
+					if ( hasLineOfSight( arguments.grid, pos, { "x": tx, "y": ty } ) ) {
+						visible[ key ] = true;
+					}
+				}
+			}
+		}
+		return visible;
+	}
+
+	/**
 	 * True if the tile at (x, y) blocks line of sight: a wall (or anything
 	 * out of bounds), or a floor tile bearing a door decoration. Doors are
 	 * deliberately walkable (a combatant "opens" one by stepping through —

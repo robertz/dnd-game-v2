@@ -545,7 +545,12 @@ class extends="modules.socketbox.models.WebSocketCore" {
 					: newMap.playerSpawn;
 				player.position = spawnOverride;
 
-				var takenPos  = [ player.position ];
+				var takenPos      = [ player.position ];
+				// buildOpponentsForMap() appends every placed mob's position onto
+				// takenPos in place — snapshot the party-only position first, or
+				// the fog sweep below would treat monster spawn points as
+				// something the party has "seen".
+				var partyPosition = duplicate( takenPos );
 				var opponents = arguments.combatService.buildOpponentsForMap( newMap, player.level, takenPos );
 				arguments.state.opponents            = opponents;
 				arguments.state.opponent             = opponents[ 1 ];
@@ -559,6 +564,12 @@ class extends="modules.socketbox.models.WebSocketCore" {
 				arguments.state.outcome              = "";
 				arguments.state.player.inCombat      = false;
 				arguments.state.mapChanged           = true;
+				// Fog of war is per-map — a new map's exploredTiles starts fresh
+				// from wherever the party lands, same as the initial sweep
+				// combat.bxm does on first entering any map.
+				var startVisible = arguments.combatService.visibleTilesFrom( newMap, partyPosition );
+				arguments.state.visibleTiles  = startVisible;
+				arguments.state.exploredTiles = duplicate( startVisible );
 				arguments.combatService.startNewRound( arguments.state );
 				arguments.state.log.prepend( "#player.name# travels to a new area." );
 				return;
@@ -637,12 +648,34 @@ class extends="modules.socketbox.models.WebSocketCore" {
 		// transition (the one time it actually changes), instead of shipping
 		// two 128x128 arrays with every state_update. The client only applies
 		// map fields when `mapTiles` is present.
-		if ( structKeyExists( arguments.state, "mapChanged" ) && arguments.state.mapChanged ) {
+		var mapJustChanged = structKeyExists( arguments.state, "mapChanged" ) && arguments.state.mapChanged;
+		if ( mapJustChanged ) {
 			arguments.state.mapChanged = false;
 			payload[ "mapWidth" ]       = arguments.state.map.width;
 			payload[ "mapHeight" ]      = arguments.state.map.height;
 			payload[ "mapTiles" ]       = arguments.state.map.tiles;
 			payload[ "mapDecorations" ] = arguments.state.map.decorations;
+		}
+		// Fog of war: `visibleTiles` (this turn's currently-lit tiles) is small
+		// — bounded by GridService's sight cap — and cheap enough to resend
+		// whole every broadcast. `exploredTiles` only grows and could get
+		// large over a long exploration, so only the tiles newly added since
+		// the last broadcast go out (`_exploredSent` tracks what the client
+		// already has); a map transition resets both the fog and this tracker
+		// together, so the fresh (small) exploredTiles set goes out whole too.
+		payload[ "visibleTiles" ] = arguments.state.visibleTiles ?: {};
+		if ( mapJustChanged || !structKeyExists( arguments.state, "_exploredSent" ) ) {
+			payload[ "newlyExplored" ] = arguments.state.exploredTiles ?: {};
+			arguments.state._exploredSent = duplicate( arguments.state.exploredTiles ?: {} );
+		} else {
+			var newly = {};
+			for ( var key in ( arguments.state.exploredTiles ?: {} ) ) {
+				if ( !structKeyExists( arguments.state._exploredSent, key ) ) {
+					newly[ key ] = true;
+					arguments.state._exploredSent[ key ] = true;
+				}
+			}
+			payload[ "newlyExplored" ] = newly;
 		}
 		return payload;
 	}

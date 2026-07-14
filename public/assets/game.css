@@ -753,6 +753,31 @@ main.scroll {
 	filter: brightness(1.25);
 }
 
+/* Fog of war (see CombatEncounter.js's isExplored()/isCurrentlyVisible()).
+   Unexplored: no background art at all — a tile the party has never seen
+   shouldn't hint at what's there via its floor/wall texture. Explored-but-
+   not-currently-visible keeps its remembered art but dims, same
+   opacity+grayscale treatment .stat-card-down already uses for "no longer
+   relevant, but still informative" content. */
+.tile-unexplored {
+	background: rgb(10, 8, 7);
+	background-image: none;
+	cursor: default;
+}
+
+.tile-unexplored:hover {
+	filter: none;
+}
+
+.tile-fogged {
+	opacity: 0.5;
+	filter: grayscale(0.6) brightness(0.7);
+}
+
+.tile-fogged:hover {
+	filter: grayscale(0.6) brightness(0.85);
+}
+
 .tile-torch:hover, .tile-pillar:hover, .tile-water:hover,
 .tile-forest:hover, .tile-mountain:hover, .tile-banner:hover {
 	filter: none;

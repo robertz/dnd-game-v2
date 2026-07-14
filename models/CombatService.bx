@@ -79,6 +79,7 @@ class singleton {
 	function randomOpenTilesNear( grid, center, radius, count, excludePositions ) { return variables.grid.randomOpenTilesNear( argumentCollection = arguments ); }
 	function chebyshev( a, b ) { return variables.grid.chebyshev( argumentCollection = arguments ); }
 	function hasLineOfSight( grid, from, to ) { return variables.grid.hasLineOfSight( argumentCollection = arguments ); }
+	function visibleTilesFrom( grid, positions ) { return variables.grid.visibleTilesFrom( argumentCollection = arguments ); }
 
 	// ── Delegators: MonsterLibrary ────────────────────────────────────────────
 	function buildOpponentsForMap( map, level, takenPositions ) { return variables.monsters.buildOpponentsForMap( argumentCollection = arguments ); }
