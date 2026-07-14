@@ -269,12 +269,12 @@ class singleton {
 			// Half-Orc Relentless Endurance: drop to 1 HP instead of 0, once per
 			// Long Rest — persisted, not reset by a fresh encounter load.
 			"hasRelentlessEndurance": arrayFindNoCase( speciesMechanics.traitNames, "Relentless Endurance" ) > 0,
-			"usedRelentlessEndurance": row.used_relentless_endurance[ 1 ] == 1,
+			"usedRelentlessEndurance": row.used_relentless_endurance[ 1 ] ? true : false,
 			// Dragonborn Breath Weapon: once per Long Rest, an area blast the
 			// opponent can save against for half damage — persisted, not reset
 			// by a fresh encounter load.
 			"hasBreathWeapon": arrayFindNoCase( speciesMechanics.traitNames, "Breath Weapon" ) > 0,
-			"usedBreathWeapon": row.used_breath_weapon[ 1 ] == 1,
+			"usedBreathWeapon": row.used_breath_weapon[ 1 ] ? true : false,
 			// Elf/Half-Elf Fey Ancestry: Advantage on saves vs. the Charmed
 			// condition, and immune to being put to sleep by magic. No current
 			// encounter content attempts to Charm or magically Sleep the
@@ -296,11 +296,11 @@ class singleton {
 			// kept as a hook for any future species that does. Persisted, not
 			// reset by a fresh encounter load.
 			"hasHeroicInspiration": arrayFindNoCase( speciesMechanics.traitNames, "Heroic Inspiration" ) > 0,
-			"usedHeroicInspiration": row.used_heroic_inspiration[ 1 ] == 1,
+			"usedHeroicInspiration": row.used_heroic_inspiration[ 1 ] ? true : false,
 			// Second Wind (Fighter 1): a bonus action heal of 1d10 + Fighter
 			// level — see useSecondWind(). Recovers on a Short or Long Rest
 			// (shortRest()/longRest()), persisted across encounters.
-			"usedSecondWind": row.used_second_wind[ 1 ] == 1,
+			"usedSecondWind": row.used_second_wind[ 1 ] ? true : false,
 			// Rage (Barbarian 1): see startRage()/endRage(). `ragesUsed` is the
 			// persisted truth (like spentSpellSlots); `ragesRemaining` is
 			// derived from it and the level-based max — see
@@ -317,7 +317,7 @@ class singleton {
 			// Magic Initiate's bonus spell recovers on a Long Rest only —
 			// persisted, not reset by a fresh encounter load (see
 			// variables.spellcasting.assignSpellcasting(), which no longer touches this field).
-			"usedMagicInitiateSpell": row.used_magic_initiate_spell[ 1 ] == 1,
+			"usedMagicInitiateSpell": row.used_magic_initiate_spell[ 1 ] ? true : false,
 			"isRaging": false,
 			// Always present (not just added on the fly when it first
 			// matters, like isRaging above) — the WebSocket broadcast's

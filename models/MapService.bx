@@ -619,7 +619,7 @@ class singleton {
 			"opponentSpawn": { "x": rows.opponent_spawn_x[ 1 ], "y": rows.opponent_spawn_y[ 1 ] },
 			"transitions": transitions,
 			"spawnPoints": spawnPoints,
-			"isEntry": rows.is_entry[ 1 ] == 1
+			"isEntry": rows.is_entry[ 1 ] ? true : false
 		};
 	}
 
