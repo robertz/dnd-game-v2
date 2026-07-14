@@ -322,12 +322,16 @@ class singleton {
 	 *  "transition". Replaces every existing transition POI on this map
 	 *  (other POI types, e.g. "encounter", are left untouched).
 	 * @spawnPoints Array of `{x, y, countMode, count, countMin, countMax,
-	 *  monsterMode, monsterName}` — opponent spawn markers, persisted as
-	 *  `adventure_map_pois` rows with poi_type "spawn". Replaces every
-	 *  existing spawn POI on this map. countMode is "fixed" (use `count`)
-	 *  or "random" (use `countMin`/`countMax`); monsterMode is "random"
-	 *  (level-appropriate draw, see CombatService.randomMonstersForLevel())
-	 *  or "specific" (use `monsterName`, see CombatService.monsterByName()).
+	 *  monsterMode, monsterName, sameType}` — opponent spawn markers,
+	 *  persisted as `adventure_map_pois` rows with poi_type "spawn".
+	 *  Replaces every existing spawn POI on this map. countMode is "fixed"
+	 *  (use `count`) or "random" (use `countMin`/`countMax`); monsterMode is
+	 *  "random" (level-appropriate draw, see
+	 *  CombatService.randomMonstersForLevel()) or "specific" (use
+	 *  `monsterName`, see CombatService.monsterByName()). When monsterMode
+	 *  is "random" and `sameType` is true, all mobs in the spawn's group
+	 *  are the same randomly-drawn species rather than each drawn
+	 *  independently.
 	 *  See default.bx's _enterMap()/_buildInitialRoster() for how these are
 	 *  consumed at map-entry time.
 	 * @isEntry If true, marks this map as its module's entry point (see
@@ -415,7 +419,8 @@ class singleton {
 						"countMin": s.keyExists( "countMin" ) ? s.countMin : 1,
 						"countMax": s.keyExists( "countMax" ) ? s.countMax : 1,
 						"monsterMode": s.monsterMode,
-						"monsterName": s.keyExists( "monsterName" ) ? s.monsterName : ""
+						"monsterName": s.keyExists( "monsterName" ) ? s.monsterName : "",
+						"sameType": s.keyExists( "sameType" ) ? s.sameType : false
 					} )
 				},
 				{ datasource: "gameserver" }
@@ -601,7 +606,8 @@ class singleton {
 				"countMin": payload.keyExists( "countMin" ) ? payload.countMin : 1,
 				"countMax": payload.keyExists( "countMax" ) ? payload.countMax : 1,
 				"monsterMode": payload.keyExists( "monsterMode" ) ? payload.monsterMode : "random",
-				"monsterName": payload.keyExists( "monsterName" ) ? payload.monsterName : ""
+				"monsterName": payload.keyExists( "monsterName" ) ? payload.monsterName : "",
+				"sameType": payload.keyExists( "sameType" ) ? payload.sameType : false
 			} );
 		}
 

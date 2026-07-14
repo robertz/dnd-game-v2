@@ -12,7 +12,20 @@ async function api( path, options = {} ) {
 		window.location.href = "/login";
 		throw new Error( `API error 401 on ${ path }` );
 	}
-	if ( !res.ok ) throw new Error( `API error ${ res.status } on ${ path }` );
+	if ( !res.ok ) {
+		// Prefer the server's own {"error": "..."} body text over a bare
+		// status code — mapeditor.bxm's 403 ("You don't own this module")
+		// and similar handlers give callers something actionable to show
+		// the user instead of a generic "API error 403" they'd have to
+		// translate themselves.
+		let detail = "";
+		try {
+			detail = ( await res.clone().json() ).error ?? "";
+		} catch ( e ) { /* body wasn't JSON — fall back to the bare status */ }
+		const err = new Error( detail || `API error ${ res.status } on ${ path }` );
+		err.status = res.status;
+		throw err;
+	}
 	return res.json();
 }
 

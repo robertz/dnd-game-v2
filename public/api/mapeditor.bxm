@@ -48,7 +48,7 @@
 </bx:script>
 <bx:if cgi.request_method == "POST" && moduleIsForbidden>
 	<bx:header statuscode="403" statustext="Forbidden">
-	<bx:script>writeOutput( jsonSerialize( { "error": "Forbidden" } ) ); return;</bx:script>
+	<bx:script>writeOutput( jsonSerialize( { "error": "Module '#body.moduleSlug#' belongs to another account — you can only edit modules you own." } ) ); return;</bx:script>
 </bx:if>
 <bx:script>
 

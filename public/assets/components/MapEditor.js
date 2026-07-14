@@ -104,6 +104,11 @@ const MapEditor = {
 									<option v-for="m in monsterOptions" :key="m.name" :value="m.name">{{ m.name }} (CR {{ m.cr }})</option>
 								</select>
 							</label>
+							<label v-if="spawnMonsterMode === 'random'" class="editor-checkbox-label">
+								<input type="checkbox" v-model="spawnSameType">
+								Same type for whole group
+							</label>
+							<button type="button" class="btn btn-sm" v-if="editingSpawnIndex !== null" @click="cancelSpawnEdit()">Cancel edit</button>
 						</div>
 
 						<div v-if="placeMode === 'transition'" class="editor-tool-options">
@@ -115,30 +120,35 @@ const MapEditor = {
 					<div v-if="playerSpawn.x || spawnPoints.length || transitions.length" class="editor-sidebar-section">
 						<h3 class="editor-sidebar-title">Placed Markers</h3>
 						<ul class="editor-marker-list">
-							<li v-if="playerSpawn.x" class="editor-marker-row">
+							<li v-if="playerSpawn.x" class="editor-marker-row editor-marker-row-clickable" title="Scroll the map to this marker" @click="scrollToTile(playerSpawn.x, playerSpawn.y)">
 								<span>⚔ Player spawn — ({{ playerSpawn.x }}, {{ playerSpawn.y }})</span>
 							</li>
-							<li v-for="(sp, i) in spawnPoints" :key="'sp'+i" class="editor-marker-row">
+							<li v-for="(sp, i) in spawnPoints" :key="'sp'+i" :class="['editor-marker-row', 'editor-marker-row-clickable', editingSpawnIndex === i ? 'editor-marker-row-editing' : '']" title="Scroll the map to this marker" @click="scrollToTile(sp.x, sp.y)">
 								<span>☠ ({{ sp.x }}, {{ sp.y }}) — {{ describeSpawn(sp) }}</span>
-								<button type="button" class="btn btn-sm btn-end-turn" @click="spawnPoints.splice(i,1)">✕</button>
+								<button type="button" class="btn btn-sm" @click.stop="editSpawn(i)">✎</button>
+								<button type="button" class="btn btn-sm btn-end-turn" @click.stop="removeSpawn(i)">✕</button>
 							</li>
-							<li v-for="(tr, i) in transitions" :key="'tr'+i" class="editor-marker-row">
+							<li v-for="(tr, i) in transitions" :key="'tr'+i" class="editor-marker-row editor-marker-row-clickable" title="Scroll the map to this marker" @click="scrollToTile(tr.x, tr.y)">
 								<span>🌀 ({{ tr.x }}, {{ tr.y }}) → {{ tr.targetModule }}/{{ tr.targetMap }}</span>
-								<button type="button" class="btn btn-sm btn-end-turn" @click="transitions.splice(i,1)">✕</button>
+								<button type="button" class="btn btn-sm btn-end-turn" @click.stop="transitions.splice(i,1)">✕</button>
 							</li>
 						</ul>
 					</div>
 
 				</aside>
 
-				<div class="editor-grid-wrap mapeditor-canvas">
-					<div v-if="grid.length" class="battle-grid" :style="{ gridTemplateColumns: 'repeat(' + width + ', 1fr)' }">
-						<template v-for="(rowArr, rIdx) in grid" :key="rIdx">
-							<div v-for="(sym, cIdx) in rowArr" :key="cIdx"
-								:class="cellClass(cIdx + 1, rIdx + 1, sym)"
-								:title="cellTitle(cIdx + 1, rIdx + 1)"
-								@click="paintTile(cIdx + 1, rIdx + 1)"
-							>{{ cellEmoji(cIdx + 1, rIdx + 1) }}</div>
+				<div class="editor-grid-wrap mapeditor-canvas" ref="gridWrapEl" @scroll="onGridScroll">
+					<div v-if="grid.length" class="battle-grid" :style="{
+						gridTemplateColumns: 'repeat(' + width + ', ' + tileSize + 'px)',
+						gridTemplateRows: 'repeat(' + height + ', ' + tileSize + 'px)'
+					}">
+						<template v-for="y in visibleRows" :key="'r'+y">
+							<div v-for="x in visibleCols" :key="x+','+y"
+								:style="{ gridColumn: x, gridRow: y, width: tileSize + 'px' }"
+								:class="cellClass(x, y, grid[y-1][x-1])"
+								:title="cellTitle(x, y)"
+								@click="paintTile(x, y)"
+							>{{ cellEmoji(x, y) }}</div>
 						</template>
 					</div>
 				</div>
@@ -146,8 +156,96 @@ const MapEditor = {
 		</div>
 	`,
 	setup() {
-		const { ref, computed, onMounted, inject } = Vue;
+		const { ref, computed, onMounted, onUnmounted, nextTick, inject } = Vue;
 		const apiCall = inject( "api" );
+
+		// Virtualized grid rendering — a hand-authored map can be up to
+		// 128x128 (16,384 tiles). Rendering every tile as a DOM node
+		// regardless of scroll position both tanks performance and hits a
+		// real WebKit/Safari rendering bug: with that many elements, tiles
+		// far from the initial viewport can lose their box-shadow border
+		// once scrolled into view (a paint bug, not something fixable by
+		// CSS alone — confirmed even after dropping `contain: paint`).
+		// Only the tiles within the current scroll viewport (plus a
+		// buffer) are ever mounted; everything else is just empty grid
+		// space, so there's nothing off-screen for the browser to get
+		// wrong. Same technique CombatEncounter.js already uses for its
+		// (much smaller, position-based rather than scroll-based) viewport
+		// window. Explicit `gridColumn`/`gridRow` placement lets a sparse
+		// subset of cells populate the full width x height track grid, so
+		// the wrap's scrollWidth/scrollHeight — and therefore the
+		// scrollbar — still reflect the map's true full size.
+		const gridWrapEl  = ref( null );
+		const tileSize    = ref( 34 );
+		const scrollLeft  = ref( 0 );
+		const scrollTop   = ref( 0 );
+		const wrapWidth   = ref( 800 );
+		const wrapHeight  = ref( 600 );
+		const flashMarker = ref( null );
+		const VIRTUALIZE_BUFFER = 6;
+		let flashMarkerTimeout = null;
+
+		// Placed Markers sidebar → click to jump there instead of hunting
+		// for a spawn point across a map that can be up to 128x128. Centers
+		// the tile in the current viewport and briefly highlights it (see
+		// .tile-marker-flash) so it's easy to spot once the view lands.
+		function scrollToTile( x, y ) {
+			if ( !gridWrapEl.value ) return;
+			const size = tileSize.value || 34;
+			const targetLeft = Math.max( 0, ( x - 0.5 ) * size - wrapWidth.value  / 2 );
+			const targetTop  = Math.max( 0, ( y - 0.5 ) * size - wrapHeight.value / 2 );
+			// Plain property assignment, not scrollTo({behavior:"smooth"}) —
+			// the smooth-scroll animation silently no-ops in some automated/
+			// headless environments (confirmed while testing this), while
+			// direct assignment is a reliable, universally-supported jump.
+			gridWrapEl.value.scrollLeft = targetLeft;
+			gridWrapEl.value.scrollTop  = targetTop;
+			onGridScroll();
+
+			flashMarker.value = { x, y };
+			if ( flashMarkerTimeout ) clearTimeout( flashMarkerTimeout );
+			flashMarkerTimeout = setTimeout( () => { flashMarker.value = null; }, 1500 );
+		}
+
+		// Mirrors .tile's own `width: clamp(16px, 2.6vw, 34px)` — driven
+		// from this same JS value (see the tile's inline `width` style)
+		// rather than trusting the grid track size and the tile's CSS
+		// clamp() to independently land on the exact same subpixel value.
+		function measureTileSize() {
+			tileSize.value = Math.min( 34, Math.max( 16, window.innerWidth * 0.026 ) );
+		}
+
+		function measureWrap() {
+			if ( !gridWrapEl.value ) return;
+			wrapWidth.value  = gridWrapEl.value.clientWidth;
+			wrapHeight.value = gridWrapEl.value.clientHeight;
+		}
+
+		function onGridScroll() {
+			if ( !gridWrapEl.value ) return;
+			scrollLeft.value = gridWrapEl.value.scrollLeft;
+			scrollTop.value  = gridWrapEl.value.scrollTop;
+		}
+
+		let resizeObserver = null;
+		onUnmounted( () => {
+			window.removeEventListener( "resize", measureTileSize );
+			if ( resizeObserver ) resizeObserver.disconnect();
+			if ( flashMarkerTimeout ) clearTimeout( flashMarkerTimeout );
+		} );
+
+		function visibleRange( scrollPos, viewportSize, tilesTotal ) {
+			const size = tileSize.value || 34;
+			const start = Math.max( 1, Math.floor( scrollPos / size ) - VIRTUALIZE_BUFFER );
+			const count = Math.ceil( viewportSize / size ) + VIRTUALIZE_BUFFER * 2;
+			const end   = Math.min( tilesTotal, start + count );
+			const out   = [];
+			for ( let i = start; i <= end; i++ ) out.push( i );
+			return out;
+		}
+
+		const visibleCols = computed( () => visibleRange( scrollLeft.value, wrapWidth.value,  width.value ) );
+		const visibleRows = computed( () => visibleRange( scrollTop.value,  wrapHeight.value, height.value ) );
 
 		const width       = ref( 20 );
 		const height      = ref( 15 );
@@ -170,6 +268,8 @@ const MapEditor = {
 		const spawnCountMax    = ref( 3 );
 		const spawnMonsterMode = ref( "random" );
 		const spawnMonsterName = ref( "" );
+		const spawnSameType    = ref( false );
+		const editingSpawnIndex = ref( null );
 		const transitionTargetModule = ref( "" );
 		const transitionTargetMap    = ref( "" );
 		const existingMaps   = ref( [] );
@@ -217,10 +317,33 @@ const MapEditor = {
 			existingMaps.value  = data.maps    ?? [];
 			monsterOptions.value = data.monsters ?? [];
 			grid.value = buildEmptyGrid( width.value, height.value );
+
+			measureTileSize();
+			window.addEventListener( "resize", measureTileSize );
+			await nextTick();
+			measureWrap();
+			if ( window.ResizeObserver && gridWrapEl.value ) {
+				resizeObserver = new ResizeObserver( measureWrap );
+				resizeObserver.observe( gridWrapEl.value );
+			}
 		} );
 
 		function buildEmptyGrid( w, h ) {
 			return Array.from( { length: h }, () => Array.from( { length: w }, () => "." ) );
+		}
+
+		// A new/just-loaded grid's dimensions can be completely different
+		// from whatever was scrolled to before — reset the scroll position
+		// (both the ref state and the actual DOM element) so the visible
+		// tile window starts back at the top-left instead of momentarily
+		// showing blank space at a leftover offset.
+		function resetGridScroll() {
+			scrollLeft.value = 0;
+			scrollTop.value  = 0;
+			if ( gridWrapEl.value ) {
+				gridWrapEl.value.scrollLeft = 0;
+				gridWrapEl.value.scrollTop  = 0;
+			}
 		}
 
 		function newGrid() {
@@ -233,8 +356,10 @@ const MapEditor = {
 			spawnPoints.value  = [];
 			transitions.value  = [];
 			isEntryMap.value   = false;
+			editingSpawnIndex.value = null;
 			saveError.value    = "";
 			saveMessage.value  = "";
+			resetGridScroll();
 		}
 
 		function selectBrush( symbol ) {
@@ -247,10 +372,40 @@ const MapEditor = {
 			// so there's always a one-click way out of a placement mode
 			// without having to reach for a brush swatch.
 			placeMode.value = ( placeMode.value === mode ) ? "paint" : mode;
+			editingSpawnIndex.value = null;
 		}
 
 		function spawnPointAt( x, y ) {
 			return spawnPoints.value.find( s => s.x === x && s.y === y ) ?? null;
+		}
+
+		// Loads a placed spawn point's settings into the tool options so it
+		// can be adjusted, then re-applied by clicking a tile (the same one,
+		// to edit in place, or a different one to move it) — see paintTile's
+		// "spawn" branch, which replaces this index instead of only matching
+		// on clicked position.
+		function editSpawn( i ) {
+			const sp = spawnPoints.value[ i ];
+			if ( !sp ) return;
+			placeMode.value         = "spawn";
+			editingSpawnIndex.value = i;
+			spawnCountMode.value    = sp.countMode ?? "fixed";
+			spawnCount.value        = sp.count ?? 1;
+			spawnCountMin.value     = sp.countMin ?? 1;
+			spawnCountMax.value     = sp.countMax ?? 3;
+			spawnMonsterMode.value  = sp.monsterMode ?? "random";
+			spawnMonsterName.value  = sp.monsterName ?? "";
+			spawnSameType.value     = sp.sameType ?? false;
+			scrollToTile( sp.x, sp.y );
+		}
+
+		function cancelSpawnEdit() {
+			editingSpawnIndex.value = null;
+		}
+
+		function removeSpawn( i ) {
+			if ( editingSpawnIndex.value === i ) editingSpawnIndex.value = null;
+			spawnPoints.value.splice( i, 1 );
 		}
 
 		function transitionAt( x, y ) {
@@ -273,7 +428,12 @@ const MapEditor = {
 					saveError.value = "Choose a specific monster before placing.";
 					return;
 				}
-				const filtered = spawnPoints.value.filter( s => !(s.x === x && s.y === y) );
+				// Editing an existing spawn point replaces that specific entry
+				// (even if it's being moved to a new tile) rather than only
+				// ever matching by clicked position.
+				const editIndex = editingSpawnIndex.value;
+				const filtered = spawnPoints.value.filter( ( s, i ) => i !== editIndex && !(s.x === x && s.y === y) );
+				editingSpawnIndex.value = null;
 				filtered.push( {
 					x, y,
 					countMode: spawnCountMode.value,
@@ -281,6 +441,7 @@ const MapEditor = {
 					countMin: Math.max( 1, spawnCountMin.value ),
 					countMax: Math.max( 1, spawnCountMax.value ),
 					monsterMode: spawnMonsterMode.value,
+					sameType: spawnSameType.value,
 					monsterName: spawnMonsterName.value
 				} );
 				spawnPoints.value = filtered;
@@ -305,9 +466,10 @@ const MapEditor = {
 		function cellClass( x, y, sym ) {
 			const tileCls = TILE_CLASSES[ sym ] ?? "";
 			let cls = "tile" + (tileCls ? " " + tileCls : "");
-			if ( playerSpawn.value.x === x && playerSpawn.value.y === y ) return cls + " tile-player";
-			if ( spawnPointAt( x, y ) ) return cls + " tile-opponent";
-			if ( transitionAt( x, y ) ) return cls + " tile-transition";
+			if ( playerSpawn.value.x === x && playerSpawn.value.y === y ) cls += " tile-player";
+			else if ( spawnPointAt( x, y ) ) cls += " tile-opponent";
+			else if ( transitionAt( x, y ) ) cls += " tile-transition";
+			if ( flashMarker.value && flashMarker.value.x === x && flashMarker.value.y === y ) cls += " tile-marker-flash";
 			return cls;
 		}
 
@@ -329,7 +491,8 @@ const MapEditor = {
 		function describeSpawn( sp ) {
 			const countLabel   = sp.countMode === "random" ? `${ sp.countMin }-${ sp.countMax }` : `${ sp.count }`;
 			const monsterLabel = sp.monsterMode === "specific" && sp.monsterName ? sp.monsterName : "random";
-			return `${ countLabel } ${ monsterLabel }`;
+			const sameTypeSuffix = sp.monsterMode !== "specific" && sp.sameType ? " (same type)" : "";
+			return `${ countLabel } ${ monsterLabel }${ sameTypeSuffix }`;
 		}
 
 		async function loadExisting() {
@@ -354,7 +517,9 @@ const MapEditor = {
 				transitions.value       = data.transitions ?? [];
 				isEntryMap.value        = data.isEntry ?? false;
 				placeMode.value         = "paint";
+				editingSpawnIndex.value = null;
 				showSettings.value      = false;
+				resetGridScroll();
 				saveMessage.value       = `Loaded '${ data.mapName }' — edit and Save Map to update it.`;
 			} catch ( e ) {
 				saveError.value = "Failed to load map.";
@@ -408,7 +573,7 @@ const MapEditor = {
 				const updated = await apiCall( "/api/mapeditor.bxm?list=1" ).catch( () => ({maps:[]}) );
 				existingMaps.value = updated.maps ?? [];
 			} catch ( e ) {
-				saveError.value = "Save failed.";
+				saveError.value = e.message || "Save failed.";
 			}
 		}
 
@@ -416,11 +581,12 @@ const MapEditor = {
 			width, height, chunkSize, moduleSlug, moduleName, moduleDescription,
 			mapSlug, mapName, isEntryMap, grid, playerSpawn, spawnPoints, transitions,
 			brush, placeMode, spawnCountMode, spawnCount, spawnCountMin, spawnCountMax,
-			spawnMonsterMode, spawnMonsterName, transitionTargetModule, transitionTargetMap,
+			spawnMonsterMode, spawnMonsterName, spawnSameType, editingSpawnIndex, transitionTargetModule, transitionTargetMap,
 			existingMaps, selectedExisting, monsterOptions, saveMessage, saveError, showSettings,
 			palette, modeLabel,
+			gridWrapEl, tileSize, visibleCols, visibleRows, onGridScroll, scrollToTile,
 			newGrid, selectBrush, setPlaceMode, paintTile, loadExisting, saveMap,
-			cellClass, cellTitle, cellEmoji, describeSpawn
+			cellClass, cellTitle, cellEmoji, describeSpawn, editSpawn, cancelSpawnEdit, removeSpawn
 		};
 	}
 };

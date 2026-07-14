@@ -47,7 +47,8 @@ class singleton {
 						mobs.append( duplicate( template ) );
 					}
 				} else {
-					mobs = randomMonstersForLevel( arguments.level, spawnCount );
+					var sameType = payload.keyExists( "sameType" ) && payload.sameType;
+					mobs = randomMonstersForLevel( arguments.level, spawnCount, sameType );
 				}
 				var positions = variables.grid.randomOpenTilesNear( arguments.map, { "x": spawnPoi.x, "y": spawnPoi.y }, 5, mobs.len(), arguments.takenPositions );
 				for ( var k = 1; k <= mobs.len(); k++ ) {
@@ -467,7 +468,14 @@ class singleton {
 	 * small handful of the seeded monsters (true non-combatants like an
 	 * Awakened Shrub, or a Frog/Sea Horse with no actions at all) have none
 	 * and are skipped, since a mob that can never attack isn't a usable
-	 * candidate.
+	 * candidate. Also excludes anything with a swim speed — maps have no
+	 * water tiles to place an aquatic mob's movement in context, so a
+	 * Chuul or Dragon Turtle turning up in a random dungeon roster reads
+	 * as a content bug rather than a real encounter. True chromatic/
+	 * metallic dragons (creature_type "Dragon (Chromatic)"/"Dragon
+	 * (Metallic)") are exempted even though every age category also lists
+	 * a swim speed — they're land/air encounters first, unlike the plain
+	 * "Dragon"-typed Dragon Turtle, which stays excluded.
 	 */
 	private function _monsterCandidatesForLevel( level ) {
 		var range = _levelAppropriateCRRange( arguments.level );
@@ -485,6 +493,10 @@ class singleton {
 			if ( crValue < range.min || crValue > range.max ) {
 				continue;
 			}
+			var isTrueDragon = findNoCase( "Dragon (", rows.creature_type[ i ] ) == 1;
+			if ( findNoCase( "swim", rows.speed[ i ] ) && !isTrueDragon ) {
+				continue;
+			}
 			var inventory = _resolveMonsterInventory( rows, i );
 			if ( inventory.len() == 0 ) {
 				continue;
@@ -496,13 +508,22 @@ class singleton {
 
 	/**
 	 * Picks `count` level-appropriate monsters from the seeded SRD `monsters`
-	 * table at random (independently per slot, so duplicates like two
-	 * Skeletons are normal). Returns fewer than `count` mobs only if the CR
-	 * band happens to have zero candidates.
+	 * table at random. Independently per slot by default, so duplicates like
+	 * two Skeletons are normal; pass `sameType` true (map editor's spawn
+	 * "same type" flag) to draw one species once and duplicate it `count`
+	 * times instead, so the whole group is uniform. Returns fewer than
+	 * `count` mobs only if the CR band happens to have zero candidates.
 	 */
-	function randomMonstersForLevel( level, count ) {
+	function randomMonstersForLevel( level, count, sameType = false ) {
 		var candidates = _monsterCandidatesForLevel( arguments.level );
 		var mobs = [];
+		if ( arguments.sameType && candidates.len() > 0 ) {
+			var template = candidates[ randRange( 1, candidates.len() ) ];
+			for ( var i = 1; i <= arguments.count; i++ ) {
+				arrayAppend( mobs, duplicate( template ) );
+			}
+			return mobs;
+		}
 		for ( var i = 1; i <= arguments.count; i++ ) {
 			if ( candidates.len() == 0 ) {
 				break;

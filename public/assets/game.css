@@ -366,7 +366,28 @@ main.scroll {
 
 .editor-grid-wrap {
 	display: flex;
-	justify-content: center;
+	/* Deliberately flex-start on both axes, not center. Two separate
+	   problems with the old `justify-content: center` + default
+	   `align-items: stretch`:
+	   - align-items:stretch forced the .battle-grid child to stretch-fill
+	     this wrap's own (max-height-capped) cross-axis size, squeezing
+	     all of its explicit row tracks into a box far shorter than their
+	     declared height instead of letting the grid overflow past
+	     max-height for real scrolling — rows ended up compressed/
+	     overlapping, which is what actually read as tiles "losing their
+	     border" once scrolled, not a browser paint bug.
+	   - justify-content:center, once the grid is wider than the wrap,
+	     centers it with the overflow extending symmetrically in both
+	     directions — so scrollLeft:0 no longer corresponds to the grid's
+	     own left edge, it's offset by half the overflow. Harmless for a
+	     simple "just show every tile" render, but it silently broke the
+	     scrollLeft/scrollTop → visible-tile-range math the virtualized
+	     renderer below depends on (see MapEditor.js's visibleRange()).
+	   flex-start on both axes keeps the grid's top-left flush with the
+	   scroll origin regardless of size, so scroll position always maps
+	   directly to grid position. */
+	justify-content: flex-start;
+	align-items: flex-start;
 	margin: 1.5rem 0;
 	overflow: auto;
 	max-height: min(50vh, 520px);
@@ -609,6 +630,12 @@ main.scroll {
 	flex: 1;
 }
 
+.editor-checkbox-label {
+	flex-direction: row !important;
+	align-items: center;
+	gap: 0.4rem !important;
+}
+
 .editor-marker-list {
 	list-style: none;
 	margin: 0;
@@ -635,6 +662,32 @@ main.scroll {
 .editor-marker-row .btn {
 	flex: none;
 	padding: 0.1rem 0.5rem;
+}
+
+.editor-marker-row-clickable {
+	cursor: pointer;
+	transition: background var(--speed) var(--ease);
+}
+
+.editor-marker-row-clickable:hover {
+	background: rgba(185, 146, 47, 0.2);
+}
+
+.editor-marker-row-editing {
+	background: rgba(185, 146, 47, 0.35);
+	outline: 1px solid var(--gold);
+}
+
+/* Briefly marks the tile a Placed Markers row just scrolled to (see
+   MapEditor.js's scrollToTile()) so it's easy to spot the instant the
+   view lands, even among a wall of near-identical dungeon tiles. */
+.tile-marker-flash {
+	animation: marker-flash 1.5s ease-out;
+}
+
+@keyframes marker-flash {
+	0%, 40%   { box-shadow: 0 0 0 3px var(--gold), 0 0 14px 4px rgba(185, 146, 47, 0.9); }
+	100%      { box-shadow: none; }
 }
 
 @media (max-width: 900px) {
@@ -683,9 +736,17 @@ main.scroll {
 	cursor: pointer;
 	position: relative;
 	transition: filter var(--speed) var(--ease);
-	/* Tiles are fixed-size and self-contained — scope layout/paint so a
-	   class change on one tile can't trigger reflow across the whole grid. */
-	contain: layout paint style;
+	/* Tiles are fixed-size and self-contained — scope layout so a class
+	   change on one tile can't trigger reflow across the whole grid.
+	   Deliberately NOT `contain: paint` — WebKit/Safari has a known bug
+	   where a paint-contained element that starts outside the viewport can
+	   fail to repaint once scrolled into view, losing its box-shadow
+	   border/bevel. Harmless on a small combat viewport (~25x25 tiles,
+	   windowed — see CombatEncounter.js's vpMinCol/vpMaxCol), but the Map
+	   Editor renders an entire map unwindowed (up to 96x96 = 9216 tiles),
+	   putting far more tiles outside the initial viewport and making the
+	   bug easy to hit there. */
+	contain: layout style;
 }
 
 .tile:hover {
