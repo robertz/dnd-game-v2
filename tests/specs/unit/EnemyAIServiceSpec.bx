@@ -33,7 +33,8 @@ class extends="testbox.system.BaseSpec" {
 	}
 
 	private function makeMember( x, y ){
-		return { "name": "Member", "position": { "x": arguments.x, "y": arguments.y }, "inCombat": false, "hitPoints": 10, "maxHitPoints": 10, "modifiers": { "dex": 0 } };
+		variables._nextCharacterId = ( variables._nextCharacterId ?: 0 ) + 1;
+		return { "characterId": variables._nextCharacterId, "name": "Member", "position": { "x": arguments.x, "y": arguments.y }, "inCombat": false, "hitPoints": 10, "maxHitPoints": 10, "modifiers": { "dex": 0 } };
 	}
 
 	private function makeOpponent( x, y, hitPoints = 10 ){

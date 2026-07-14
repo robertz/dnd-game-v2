@@ -116,10 +116,25 @@ class singleton {
 			member.bonusActionUsed     = false;
 			member.attacksUsedThisTurn = 0;
 		}
+		// Control returns to whichever party member appears first (and is
+		// still alive) in the roster at the start of every new turn, rather
+		// than staying on whoever was last active — a dead member can't stay
+		// in control across rounds.
+		var firstAvailableIndex = 1;
+		for ( var i = 1; i <= arguments.state.players.len(); i++ ) {
+			var candidate = arguments.state.players[ i ];
+			if ( !( structKeyExists( candidate, "isDead" ) && candidate.isDead ) ) {
+				firstAvailableIndex = i;
+				break;
+			}
+		}
+		arguments.state.activePlayerIndex = firstAvailableIndex;
+
 		// state.player is a live alias into state.players, so its fields were
 		// just reset by the loop above — refresh the top-level scratch copy
 		// every other combat function reads via state.movementRemaining etc.
 		var active = arguments.state.players[ arguments.state.activePlayerIndex ];
+		arguments.state.player = active;
 		arguments.state.movementRemaining   = active.movementRemaining;
 		arguments.state.actionUsed          = active.actionUsed;
 		arguments.state.bonusActionUsed     = active.bonusActionUsed;
