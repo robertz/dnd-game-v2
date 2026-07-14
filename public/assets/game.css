@@ -692,11 +692,18 @@ main.scroll {
 	filter: brightness(1.25);
 }
 
-.tile-wall:hover, .tile-torch:hover, .tile-pillar:hover, .tile-water:hover,
-.tile-forest:hover, .tile-mountain:hover, .tile-banner:hover,
+.tile-torch:hover, .tile-pillar:hover, .tile-water:hover,
+.tile-forest:hover, .tile-mountain:hover, .tile-banner:hover {
+	filter: none;
+}
+
+/* Same "no hover feedback" intent as the block above, but walls carry
+   their own base darkening (see .tile-wall below) that hover must
+   preserve instead of clearing to none. */
+.tile-wall:hover,
 .tile-wall-corner-tl:hover, .tile-wall-corner-tr:hover, .tile-wall-corner-bl:hover, .tile-wall-corner-br:hover,
 .tile-wall-top:hover, .tile-wall-bottom:hover, .tile-wall-edge-l:hover, .tile-wall-edge-r:hover {
-	filter: none;
+	filter: brightness(0.6);
 }
 
 /* Loot POIs get their own glowing marker tile, same convention as
@@ -727,6 +734,7 @@ main.scroll {
 	background-image: url(images/tiles/wall-0x72ii.png);
 	background-size: cover;
 	box-shadow: inset 1px 1px 0 rgba(255,255,255,0.06), inset -1px -1px 0 rgba(0,0,0,0.5);
+	filter: brightness(0.6);
 	cursor: default;
 }
 
@@ -738,6 +746,7 @@ main.scroll {
 .tile-wall-top, .tile-wall-bottom, .tile-wall-edge-l, .tile-wall-edge-r {
 	background-size: cover;
 	box-shadow: inset 1px 1px 0 rgba(255,255,255,0.06), inset -1px -1px 0 rgba(0,0,0,0.5);
+	filter: brightness(0.6);
 	cursor: default;
 }
 /* .tile-wall-corner-tl { background-image: url(images/tiles/wall-corner-tl-0x72ii.png); }
