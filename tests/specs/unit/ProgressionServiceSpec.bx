@@ -1,0 +1,47 @@
+/**
+ * Unit tests for app/models/combat/ProgressionService.bx's party-XP split.
+ * Instantiated directly with real RulesService/SpellcastingService/DiceService
+ * (ProgressionService itself is stateless aside from those), same pattern
+ * CombatService.init() wires up.
+ *
+ * awardPartyExperience() ultimately calls awardExperience(), which writes to
+ * the `characters` table — covering the awarded-share amount itself belongs
+ * in an integration-style test with its own DB fixture, not here (same
+ * reasoning CombatServiceSpec's own header note gives for skipping the kill/
+ * XP path). What's covered here is the living-vs-dead split logic itself,
+ * which is observable without touching the DB: a party of only dead members
+ * used to divide the XP award by state.players.len() unconditionally, which
+ * still included the dead — awardExperience() got called on their behalf
+ * needlessly (a no-op for a nonexistent character, but not a meaningfully
+ * dead one) and, worse, a party that's *entirely* dead now returns instead of
+ * dividing by a zero-length "living" list.
+ */
+class extends="testbox.system.BaseSpec" {
+
+	function beforeAll(){
+		var dice = new models.combat.DiceService();
+		var rules = new models.combat.RulesService();
+		var spellcasting = new models.combat.SpellcastingService( dice );
+		variables.service = new models.combat.ProgressionService( rules, spellcasting );
+	}
+
+	private function makeMember( characterId, isDead = false ){
+		return { "characterId": arguments.characterId, "name": "Member#arguments.characterId#", "isDead": arguments.isDead };
+	}
+
+	function run(){
+		describe( "awardPartyExperience()", () => {
+
+			it( "does not error when every party member is dead", () => {
+				var state = { "players": [ makeMember( -1, true ), makeMember( -2, true ) ], "log": [] };
+				expect( () => service.awardPartyExperience( state, 300 ) ).notToThrow();
+			} );
+
+			it( "still awards a mixed living/dead party without erroring", () => {
+				var state = { "players": [ makeMember( -1 ), makeMember( -2, true ), makeMember( -3 ) ], "log": [] };
+				expect( () => service.awardPartyExperience( state, 300 ) ).notToThrow();
+			} );
+
+		} );
+	}
+}

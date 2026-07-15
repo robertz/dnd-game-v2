@@ -85,24 +85,34 @@ class singleton {
 	}
 
 	/**
-	 * Splits `xp` evenly (rounded down) across every character in
+	 * Splits `xp` evenly (rounded down) across every living character in
 	 * `state.players` and awards each their share via awardExperience() —
 	 * everyone in the party benefits from a kill, not just whoever's
 	 * currently active/landed the blow. Downed-but-not-dead members still
-	 * get a share (this app has no "left the party" state to exclude
-	 * anyone by), matching the SRD's usual "everyone present splits it"
-	 * guidance. A party of one gets the full amount, same as before party
-	 * play existed.
+	 * get a share, matching the SRD's usual "everyone present splits it"
+	 * guidance — but a DEAD member (3 failed death saves, `isDead`) has
+	 * nothing left to level up, so they're excluded from both the split
+	 * and the count it's divided by. A party of one gets the full amount,
+	 * same as before party play existed.
 	 *
 	 * @state The encounter's full mutable game state struct.
 	 * @xp The opponent's total XP award, before splitting.
 	 */
 	function awardPartyExperience( state, xp ) {
-		var share = int( arguments.xp / arguments.state.players.len() );
+		var living = [];
+		for ( var member in arguments.state.players ) {
+			if ( !( structKeyExists( member, "isDead" ) && member.isDead ) ) {
+				living.append( member );
+			}
+		}
+		if ( living.len() == 0 ) {
+			return;
+		}
+		var share = int( arguments.xp / living.len() );
 		if ( share <= 0 ) {
 			return;
 		}
-		for ( var member in arguments.state.players ) {
+		for ( var member in living ) {
 			awardExperience( arguments.state, share, member );
 		}
 	}
