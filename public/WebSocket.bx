@@ -110,6 +110,9 @@ class extends="modules.socketbox.models.WebSocketCore" {
 			case "select_active_character":
 				_handleSelectActiveCharacter( state, data, combatService, characterService );
 				break;
+			case "toggle_follow_active_player":
+				_handleToggleFollowActivePlayer( state, data );
+				break;
 			case "confirm_asi":
 				_handleConfirmAsi( state, data, combatService );
 				break;
@@ -207,7 +210,20 @@ class extends="modules.socketbox.models.WebSocketCore" {
 		arguments.combatService.checkOpportunityAttacks( arguments.state, player, true, startPosition );
 		arguments.combatService.updateCombatState( arguments.state );
 		_checkLoot( arguments.state, arguments.characterService, arguments.mapService );
+
+		var moduleBefore = arguments.state.moduleSlug;
+		var mapBefore    = arguments.state.mapSlug;
 		_checkMapTransition( arguments.state, arguments.mapService, arguments.combatService );
+
+		// Free exploration only — a combat turn's positioning is deliberate,
+		// so the rest of the party never gets dragged along mid-fight (see
+		// CombatActionsService.followActivePlayer()). Skipped on a map
+		// transition too, since the leader's new position is already on a
+		// different map than the followers' stale coordinates.
+		var transitioned = arguments.state.moduleSlug != moduleBefore || arguments.state.mapSlug != mapBefore;
+		if ( !transitioned && !arguments.state.initiativeRolled && ( arguments.state.followActivePlayer ?: false ) ) {
+			arguments.combatService.followActivePlayer( arguments.state );
+		}
 	}
 
 	private function _handleAttack( state, data, combatService ) {
@@ -376,6 +392,14 @@ class extends="modules.socketbox.models.WebSocketCore" {
 		}
 		arguments.combatService.switchActivePlayer( arguments.state, int( val( arguments.data.playerIndex ) ) );
 		arguments.state.items = arguments.characterService.getItemInventory( arguments.state.player.characterId );
+	}
+
+	// Gates CombatActionsService.followActivePlayer() in _handleMove() —
+	// stored on `state` (not just client-side) so it survives a reload and
+	// so the DM/party sees the same setting rather than each browser tab
+	// guessing independently.
+	private function _handleToggleFollowActivePlayer( state, data ) {
+		arguments.state.followActivePlayer = isBoolean( arguments.data.enabled ?: "" ) && arguments.data.enabled;
 	}
 
 	private function _handleSelectTarget( state, data ) {
@@ -619,6 +643,7 @@ class extends="modules.socketbox.models.WebSocketCore" {
 			"type"                  : "state_update",
 			"playerDelta"           : _playerDelta( arguments.state ),
 			"activePlayerIndex"     : arguments.state.activePlayerIndex,
+			"followActivePlayer"    : arguments.state.followActivePlayer ?: true,
 			"opponents"             : arguments.combatService.opponentsForClient( arguments.state ),
 			"currentTurn"           : arguments.state.currentTurn,
 			"round"                 : arguments.state.round,

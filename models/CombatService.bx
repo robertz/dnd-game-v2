@@ -134,6 +134,7 @@ class singleton {
 
 	// ── Delegators: CombatActionsService ──────────────────────────────────────
 	function switchActivePlayer( state, newIndex ) { return variables.actions.switchActivePlayer( argumentCollection = arguments ); }
+	function followActivePlayer( state ) { return variables.actions.followActivePlayer( argumentCollection = arguments ); }
 	function initMemberEconomy( member ) { return variables.actions.initMemberEconomy( argumentCollection = arguments ); }
 	function memberHasActionsLeft( state, idx ) { return variables.actions.memberHasActionsLeft( argumentCollection = arguments ); }
 	function startNewRound( state ) { return variables.actions.startNewRound( argumentCollection = arguments ); }

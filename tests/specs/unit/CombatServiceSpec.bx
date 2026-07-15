@@ -52,6 +52,27 @@ class extends="testbox.system.BaseSpec" {
 		return { "width": width, "height": height, "tiles": tiles };
 	}
 
+	/**
+	 * A 9x3 grid: an open 3x3 room at x=1-3 (all 3 rows), joined to a
+	 * single-tile-wide corridor at row y=2 running from x=4 to x=9 — walled
+	 * above and below the whole way, so there is exactly one path through and
+	 * exactly one tile adjacent to whatever's waiting at the far end.
+	 */
+	private function makeCorridorGrid(){
+		var width = 9;
+		var height = 3;
+		var tiles = [];
+		for ( var y = 1; y <= height; y++ ) {
+			var row = [];
+			for ( var x = 1; x <= width; x++ ) {
+				var isFloor = ( x <= 3 ) || ( y == 2 );
+				arrayAppend( row, isFloor ? "floor" : "wall" );
+			}
+			arrayAppend( tiles, row );
+		}
+		return { "width": width, "height": height, "tiles": tiles };
+	}
+
 	function run(){
 		describe( "CombatService", () => {
 
@@ -3167,6 +3188,91 @@ class extends="testbox.system.BaseSpec" {
 					service.switchActivePlayer( state, 2 );
 					expect( state.activePlayerIndex ).toBe( 1 );
 					expect( state.player.name ).toBe( "First" );
+				} );
+			} );
+
+			describe( "followActivePlayer()", () => {
+				it( "moves a trailing member toward the leader", () => {
+					var leader   = makeCombatant( 5, 5, { "characterId": 1, "name": "Leader" } );
+					var follower = makeCombatant( 1, 5, { "characterId": 2, "name": "Follower" } );
+					var state = { "player": leader, "players": [ leader, follower ], "activePlayerIndex": 1, "map": makeWallGrid( -1, -1 ) };
+
+					service.followActivePlayer( state );
+
+					expect( service.chebyshev( follower, leader ) ).toBe( 1 );
+				} );
+
+				it( "leaves a downed member in place", () => {
+					var leader   = makeCombatant( 5, 5, { "characterId": 1, "name": "Leader" } );
+					var downed   = makeCombatant( 1, 5, { "characterId": 2, "name": "Downed", "hitPoints": 0 } );
+					var state = { "player": leader, "players": [ leader, downed ], "activePlayerIndex": 1, "map": makeWallGrid( -1, -1 ) };
+
+					service.followActivePlayer( state );
+
+					expect( downed.position.x ).toBe( 1 );
+					expect( downed.position.y ).toBe( 5 );
+				} );
+
+				it( "leaves a dead member in place", () => {
+					var leader = makeCombatant( 5, 5, { "characterId": 1, "name": "Leader" } );
+					var dead   = makeCombatant( 1, 5, { "characterId": 2, "name": "Dead", "isDead": true } );
+					var state = { "player": leader, "players": [ leader, dead ], "activePlayerIndex": 1, "map": makeWallGrid( -1, -1 ) };
+
+					service.followActivePlayer( state );
+
+					expect( dead.position.x ).toBe( 1 );
+					expect( dead.position.y ).toBe( 5 );
+				} );
+
+				it( "does not move the leader itself", () => {
+					var leader   = makeCombatant( 5, 5, { "characterId": 1, "name": "Leader" } );
+					var follower = makeCombatant( 1, 5, { "characterId": 2, "name": "Follower" } );
+					var state = { "player": leader, "players": [ leader, follower ], "activePlayerIndex": 1, "map": makeWallGrid( -1, -1 ) };
+
+					service.followActivePlayer( state );
+
+					expect( leader.position.x ).toBe( 5 );
+					expect( leader.position.y ).toBe( 5 );
+				} );
+
+				it( "doesn't stack two followers onto the same tile", () => {
+					var leader = makeCombatant( 5, 5, { "characterId": 1, "name": "Leader" } );
+					var f1     = makeCombatant( 1, 5, { "characterId": 2, "name": "F1" } );
+					var f2     = makeCombatant( 1, 5, { "characterId": 3, "name": "F2" } );
+					var state = { "player": leader, "players": [ leader, f1, f2 ], "activePlayerIndex": 1, "map": makeWallGrid( -1, -1 ) };
+
+					service.followActivePlayer( state );
+
+					expect( f1.position.x == f2.position.x && f1.position.y == f2.position.y ).toBeFalse();
+				} );
+
+				it( "lines up single-file through a one-tile-wide corridor instead of scattering", () => {
+					// Leader waits at the far (east) end of the corridor; every
+					// follower starts together in the room at the near end, well
+					// outside the corridor. Only one tile is ever adjacent to
+					// whoever's ahead in the corridor, so aiming every follower
+					// straight at the leader (the pre-fix behavior) leaves later
+					// followers with no reachable tile next to the leader and
+					// sends them hunting elsewhere; chasing the mover directly
+					// ahead of them instead keeps the whole line in the corridor.
+					var leader = makeCombatant( 9, 2, { "characterId": 1, "name": "Leader" } );
+					var f1 = makeCombatant( 1, 1, { "characterId": 2, "name": "F1", "speed": 100 } );
+					var f2 = makeCombatant( 1, 2, { "characterId": 3, "name": "F2", "speed": 100 } );
+					var f3 = makeCombatant( 1, 3, { "characterId": 4, "name": "F3", "speed": 100 } );
+					var state = {
+						"player": leader, "players": [ leader, f1, f2, f3 ], "activePlayerIndex": 1,
+						"map": makeCorridorGrid()
+					};
+
+					service.followActivePlayer( state );
+
+					// Every follower made it into the corridor (row y=2, past the
+					// room's x<=3 boundary) and formed an unbroken chain back from
+					// the leader — nobody got stranded in the room or bounced off
+					// to some other tile.
+					expect( f1.position ).toBe( { "x": 8, "y": 2 } );
+					expect( f2.position ).toBe( { "x": 7, "y": 2 } );
+					expect( f3.position ).toBe( { "x": 6, "y": 2 } );
 				} );
 			} );
 

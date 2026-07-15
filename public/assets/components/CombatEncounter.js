@@ -129,6 +129,14 @@ const CombatEncounter = {
 					</div>
 				</div>
 
+				<!-- Viewport controls -->
+				<div v-if="mapLoaded" class="viewport-controls">
+					<label>
+						<input type="checkbox" v-model="followActivePlayer" @change="toggleFollowActivePlayer">
+						Follow active player
+					</label>
+				</div>
+
 				<!-- Spell slots -->
 				<p v-if="!cs.gameOver && cs.initiativeRolled && cs.player.isSpellcaster && cs.player.spellSlots && Object.keys(cs.player.spellSlots).length" class="stat-note spell-slot-bar">
 					<strong>Spell Slots</strong>
@@ -441,6 +449,7 @@ const CombatEncounter = {
 				items:                 data.items                 ?? cs.items,
 				gridPois:              data.gridPois              ?? cs.gridPois
 			} );
+			if ( data.followActivePlayer !== undefined ) followActivePlayer.value = data.followActivePlayer;
 			// Broadcasts carry POIs only as gridPois; the initial /api/combat.bxm
 			// response also sends them as mapPois but the two are identical.
 			if ( data.gridPois ) mapPois.value = data.gridPois;
@@ -482,6 +491,15 @@ const CombatEncounter = {
 		}
 
 		// ── Viewport helpers ────────────────────────────────────────────────
+
+		// "Follow active player" is a party-movement setting (see
+		// CombatActionsService.followActivePlayer()), not a camera setting —
+		// the viewport itself always centers on the active combatant.
+		const followActivePlayer = ref( true );
+
+		function toggleFollowActivePlayer() {
+			ws( "toggle_follow_active_player", { enabled: followActivePlayer.value } );
+		}
 
 		const vpMinCol = computed( () => {
 			if ( !cs.player || !cs.player.position || !mapWidth.value ) return 1;
@@ -880,7 +898,7 @@ const CombatEncounter = {
 
 		return {
 			cs, loading, mapLoaded, mapWidth, mapHeight, partyMembers,
-			vpMinCol, vpMinRow, viewportCols, viewportRows,
+			vpMinCol, vpMinRow, viewportCols, viewportRows, followActivePlayer, toggleFollowActivePlayer,
 			asiMode, asiAbility1, asiAbility2, asiSelectedFeat, asiSelectedSkills, restDiceCount,
 			abilityAbbrs, ALL_SKILLS, availableLevelUpFeats,
 			playerBloodied, visibleFoes, foeBloodied, xpPercent, remainingAttacks, canOffHandAttack,

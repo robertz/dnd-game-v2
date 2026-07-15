@@ -55,6 +55,55 @@ class singleton {
 	}
 
 	/**
+	 * Drags every other living, non-dead party member along behind
+	 * `state.player` (the active/lead member) in a conga line, one BFS-pathed
+	 * step at a time via Grid.moveToward() — the same mover EnemyAIService
+	 * uses for mobs closing on a target — so exploring as a group doesn't
+	 * require repositioning each character by hand after every move.
+	 *
+	 * Each follower chases whoever is immediately ahead of them in roster
+	 * order (the first follower chases the leader, the second chases the
+	 * first, and so on), NOT the leader directly — a single-file hallway has
+	 * only one tile actually adjacent to the leader, so once the first
+	 * follower claims it, aiming everyone else at the leader too sends them
+	 * on a BFS hunt for some other adjacent tile, however far out of the way
+	 * that turns out to be (e.g. back through a side room). Chasing the
+	 * mover just ahead keeps the whole line converging on the same corridor
+	 * instead of scattering.
+	 *
+	 * Exploration only; the caller (WebSocket._handleMove()) gates this on
+	 * the "Follow active player" toggle and never calls it once initiative's
+	 * rolled, since a combat turn's positioning is deliberate. Downed (0 HP)
+	 * or dead members can't walk on their own and are left in place — they
+	 * neither move nor break the chain, so the next living follower still
+	 * chases whoever they'd have chased anyway. Movers are processed in
+	 * roster order, each one's landing square folded into the next mover's
+	 * `occupiedPositions` so two followers can't path onto the same tile.
+	 *
+	 * @state The encounter's full mutable game state struct.
+	 */
+	function followActivePlayer( state ) {
+		var leader = arguments.state.player;
+		var chaseTarget = leader;
+		var occupied = [ { "x": leader.position.x, "y": leader.position.y } ];
+		for ( var i = 1; i <= arguments.state.players.len(); i++ ) {
+			if ( i == arguments.state.activePlayerIndex ) {
+				continue;
+			}
+			var member = arguments.state.players[ i ];
+			if ( member.hitPoints <= 0 || ( structKeyExists( member, "isDead" ) && member.isDead ) || cantMove( member ) ) {
+				continue;
+			}
+			var maxSteps = max( 0, int( member.speed / 5 ) );
+			if ( maxSteps > 0 ) {
+				variables.grid.moveToward( member, chaseTarget, maxSteps, arguments.state.map, occupied );
+			}
+			occupied.append( { "x": member.position.x, "y": member.position.y } );
+			chaseTarget = member;
+		}
+	}
+
+	/**
 	 * Initializes the per-turn economy fields on a freshly loaded party
 	 * member so switchActivePlayer()/memberHasActionsLeft() can read them
 	 * without existence checks. Called once per member at encounter build.
