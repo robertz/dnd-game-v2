@@ -1,0 +1,34 @@
+<bx:header name="Content-Type" value="application/json">
+<bx:script>
+
+	auth = application.authService;
+	userId = auth.currentUserId();
+</bx:script>
+<bx:if !userId>
+	<bx:header statuscode="401" statustext="Unauthorized">
+	<bx:script>writeOutput( jsonSerialize( { "error": "Unauthorized" } ) ); return;</bx:script>
+</bx:if>
+<bx:script>
+
+	characterService = application.characterService;
+
+	if ( cgi.request_method == "POST" ) {
+		body = jsonDeserialize( getHttpRequestData().content );
+		rows = characterService.setParty( ownerUserId = userId, characterIds = body.characterIds ?: [] );
+	} else {
+		rows = characterService.getParty( userId );
+	}
+
+	result = [];
+	for ( row in rows ) {
+		result.append( {
+			"id"          : row.id,
+			"name"        : row.name,
+			"className"   : row.className,
+			"level"       : row.level,
+			"hitPoints"   : row.hit_points,
+			"maxHitPoints": row.max_hit_points
+		} );
+	}
+	writeOutput( jsonSerialize( result ) );
+</bx:script>

@@ -281,6 +281,99 @@ main.scroll {
 	border-bottom: 1px solid rgba(185, 146, 47, 0.35);
 }
 
+/* Party toolbar — same trigger/dropdown pattern as .site-nav-account, but a
+   pill trigger (shows a live member count) rather than an avatar badge, and
+   a wider menu since it lists multiple members instead of a few links. */
+.party-toolbar {
+	position: relative;
+	display: flex;
+}
+
+.party-toolbar-trigger {
+	font-family: "Cinzel Decorative", serif;
+	font-size: 0.85rem;
+	color: var(--parchment);
+	background: var(--night);
+	border: 1px solid var(--gold);
+	border-radius: var(--radius-sm);
+	padding: 0.4rem 0.9rem;
+	cursor: pointer;
+	transition: background var(--speed) var(--ease), color var(--speed) var(--ease),
+		box-shadow var(--speed) var(--ease);
+}
+
+.party-toolbar-trigger:hover,
+.party-toolbar-open .party-toolbar-trigger {
+	background: var(--gold);
+	color: var(--night);
+	box-shadow: 0 0 10px 1px rgba(185, 146, 47, 0.55);
+}
+
+.party-toolbar-menu {
+	display: none;
+	position: absolute;
+	top: calc(100% + 8px);
+	right: 0;
+	z-index: 20;
+	flex-direction: column;
+	align-items: stretch;
+	gap: 0.5rem;
+	min-width: 220px;
+	background: var(--night);
+	border: 1px solid var(--gold);
+	border-radius: var(--radius-sm);
+	padding: 0.6rem;
+	box-shadow: 0 10px 30px rgba(0, 0, 0, 0.55);
+}
+
+.party-toolbar-open .party-toolbar-menu {
+	display: flex;
+}
+
+.party-toolbar-member {
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+	padding-bottom: 0.4rem;
+	border-bottom: 1px solid rgba(185, 146, 47, 0.35);
+}
+
+.party-toolbar-member-info {
+	flex: 1;
+	display: flex;
+	flex-direction: column;
+	gap: 0.15rem;
+	min-width: 0;
+}
+
+.party-toolbar-member-name {
+	font-family: "Cinzel Decorative", serif;
+	font-size: 0.85rem;
+	color: var(--gold);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.party-toolbar-member-remove {
+	flex: none;
+	background: none;
+	border: none;
+	color: var(--parchment);
+	font-size: 1.1rem;
+	line-height: 1;
+	cursor: pointer;
+	padding: 0.2rem;
+}
+
+.party-toolbar-member-remove:hover {
+	color: var(--gold);
+}
+
+.party-toolbar-start {
+	width: 100%;
+}
+
 .parchment-panel {
 	background:
 		radial-gradient( ellipse at top left, rgba(255,255,255,0.15), transparent 60% ),
@@ -2096,6 +2189,31 @@ main.scroll {
 	.site-nav-account-menu a {
 		width: 100%;
 		box-sizing: border-box;
+	}
+
+	/* Same reasoning as .site-nav-account above — fold into the stacked
+	   hamburger column instead of a nested dropdown. */
+	.party-toolbar {
+		flex-direction: column;
+		align-items: stretch;
+		width: 100%;
+	}
+
+	.party-toolbar-trigger {
+		width: 100%;
+		box-sizing: border-box;
+	}
+
+	.party-toolbar-menu {
+		display: flex;
+		position: static;
+		width: 100%;
+		box-sizing: border-box;
+		box-shadow: none;
+		border: none;
+		background: none;
+		padding: 0;
+		margin-top: 0.5rem;
 	}
 }
 

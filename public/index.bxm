@@ -25,6 +25,7 @@
 	<script src="/assets/components/ModuleSelect.js?v=#application.assetVersion#"></script>
 	<script src="/assets/components/CombatEncounter.js?v=#application.assetVersion#"></script>
 	<script src="/assets/components/MapEditor.js?v=#application.assetVersion#"></script>
+	<script src="/assets/components/PartyToolbar.js?v=#application.assetVersion#"></script>
 	<script src="/assets/app.js?v=#application.assetVersion#"></script>
 	</bx:output>
 </body>

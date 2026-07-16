@@ -219,6 +219,57 @@ class singleton {
 	}
 
 	/**
+	 * The characters ownerUserId has saved as their standing adventuring
+	 * party, in party_members.position order.
+	 */
+	function getParty( ownerUserId ) {
+		return queryExecute(
+			"SELECT c.id, c.name, cl.name AS className, c.level, c.hit_points, c.max_hit_points
+			 FROM party_members pm
+			 JOIN characters c ON c.id = pm.character_id
+			 JOIN classes cl ON cl.id = c.class_id
+			 WHERE pm.owner_user_id = :ownerUserId
+			 ORDER BY pm.position",
+			{ "ownerUserId": arguments.ownerUserId }, { datasource: "gameserver" }
+		);
+	}
+
+	/**
+	 * Replaces ownerUserId's whole standing party with characterIds, in
+	 * order (capped at 4, matching the client's own party-size limit).
+	 * Silently drops any id that isn't one of ownerUserId's own characters,
+	 * the same ownership boundary deleteCharacter() enforces, so a party
+	 * can't be seeded with someone else's character.
+	 */
+	function setParty( ownerUserId, characterIds ) {
+		var ownedRows = queryExecute(
+			"SELECT id FROM characters WHERE owner_user_id = :ownerUserId",
+			{ "ownerUserId": arguments.ownerUserId }, { datasource: "gameserver" }
+		);
+		var owned = {};
+		for ( var ownedRow in ownedRows ) {
+			owned[ ownedRow.id ] = true;
+		}
+		queryExecute(
+			"DELETE FROM party_members WHERE owner_user_id = :ownerUserId",
+			{ "ownerUserId": arguments.ownerUserId }, { datasource: "gameserver" }
+		);
+		var position = 0;
+		for ( var characterId in arguments.characterIds ) {
+			if ( position >= 4 || !structKeyExists( owned, characterId ) ) {
+				continue;
+			}
+			queryExecute(
+				"INSERT INTO party_members (owner_user_id, character_id, position) VALUES (:ownerUserId, :characterId, :position)",
+				{ "ownerUserId": arguments.ownerUserId, "characterId": characterId, "position": position },
+				{ datasource: "gameserver" }
+			);
+			position++;
+		}
+		return getParty( arguments.ownerUserId );
+	}
+
+	/**
 	 * Creates a new character row with standard derived stats — Level 1 Hit
 	 * Points (class hit die max + Con modifier, per the "Level 1 Hit Points
 	 * by Class" table), base Armor Class (10 + Dex modifier; class features

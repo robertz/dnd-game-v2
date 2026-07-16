@@ -29,6 +29,25 @@ async function api( path, options = {} ) {
 	return res.json();
 }
 
+// ── Shared party state (standing adventuring party, persisted server-side) ───
+
+// Populated once per login (see App's onMounted / setCurrentUser below) and
+// shared by CharacterSelect and PartyToolbar so both reflect the same saved
+// party without either owning a separate copy.
+const partyState = reactive( { members: [], loaded: false } );
+
+async function loadParty() {
+	partyState.members = await api( "/api/party.bxm" );
+	partyState.loaded = true;
+}
+
+async function saveParty( characterIds ) {
+	partyState.members = await api( "/api/party.bxm", {
+		method: "POST",
+		body: JSON.stringify( { characterIds } )
+	} );
+}
+
 // ── LoadingVeil (shared spinner for any page still fetching) ─────────────────
 
 const LoadingVeil = {
@@ -154,11 +173,15 @@ const CharacterSelect = {
 		const characters = ref( [] );
 		const loading    = ref( true );
 		const error      = ref( "" );
-		const party      = ref( [] );
+		// Read-through view of the shared, server-persisted partyState — kept
+		// as a plain id array here since that's what isInParty()/toggle/start
+		// already work with, and what localStorage.partyCharIds expects.
+		const party = computed( () => partyState.members.map( ( m ) => m.id ) );
 
 		onMounted( async () => {
 			try {
 				characters.value = await api( "/api/characters.bxm" );
+				if ( !partyState.loaded ) await loadParty();
 			} catch ( e ) {
 				error.value = "Could not load characters. Is the server running?";
 			} finally {
@@ -171,9 +194,15 @@ const CharacterSelect = {
 			router.push( "/character/sheet" );
 		}
 
-		function playCharacter( id ) {
+		async function playCharacter( id ) {
 			localStorage.setItem( "charId", id );
 			localStorage.setItem( "partyCharIds", JSON.stringify( [ id ] ) );
+			// Soloing replaces the standing party with just this character,
+			// same as picking party members does — the saved party is meant
+			// to always be "who I'm currently adventuring with," so this
+			// keeps the toolbar and Character Select in sync with what's
+			// actually about to happen instead of silently diverging from it.
+			await saveParty( [ id ] );
 			router.push( "/adventure" );
 		}
 
@@ -181,8 +210,10 @@ const CharacterSelect = {
 			if ( !window.confirm( `Delete ${ character.name }? This can't be undone.` ) ) return;
 			await api( `/api/characters.bxm?id=${ character.id }`, { method: "DELETE" } );
 			characters.value = characters.value.filter( ( c ) => c.id !== character.id );
-			const idx = party.value.indexOf( character.id );
-			if ( idx !== -1 ) party.value.splice( idx, 1 );
+			// party_members cascades server-side on character delete (see
+			// db/schema.sql fk_party_character) — refetch rather than guess
+			// at the resulting order.
+			if ( isInParty( character.id ) ) await loadParty();
 			if ( localStorage.getItem( "charId" ) == character.id ) {
 				localStorage.removeItem( "charId" );
 			}
@@ -192,13 +223,15 @@ const CharacterSelect = {
 			return party.value.includes( id );
 		}
 
-		function togglePartyMember( id ) {
-			const idx = party.value.indexOf( id );
+		async function togglePartyMember( id ) {
+			const ids = party.value.slice();
+			const idx = ids.indexOf( id );
 			if ( idx !== -1 ) {
-				party.value.splice( idx, 1 );
-			} else if ( party.value.length < 4 ) {
-				party.value.push( id );
+				ids.splice( idx, 1 );
+			} else if ( ids.length < 4 ) {
+				ids.push( id );
 			}
+			await saveParty( ids );
 		}
 
 		function startPartyAdventure() {
@@ -239,6 +272,7 @@ const CharacterSelect = {
 // ModuleSelect      loaded from /assets/components/ModuleSelect.js
 // CombatEncounter   loaded from /assets/components/CombatEncounter.js
 // MapEditor         loaded from /assets/components/MapEditor.js
+// PartyToolbar      loaded from /assets/components/PartyToolbar.js
 
 // ── Router ────────────────────────────────────────────────────────────────────
 
@@ -385,6 +419,8 @@ const App = {
 				</template>
 				<router-link to="/map-editor" class="site-nav-desktop-only" :class="{ 'site-nav-active': route.path === '/map-editor' }">Map Editor</router-link>
 
+				<party-toolbar v-if="currentUser" />
+
 				<div class="site-nav-account" ref="accountMenuEl" :class="{ 'site-nav-account-open': accountMenuOpen }">
 					<button
 						type="button"
@@ -447,11 +483,14 @@ const App = {
 		onMounted( async () => {
 			const result = await api( "/api/auth.bxm" );
 			currentUser.value = result.userId ? result : null;
+			if ( currentUser.value ) await loadParty();
 		} );
 
 		async function logout() {
 			await api( "/api/auth.bxm", { method: "POST", body: JSON.stringify( { action: "logout" } ) } );
 			currentUser.value = null;
+			partyState.members = [];
+			partyState.loaded = false;
 			router.push( "/login" );
 		}
 
@@ -463,9 +502,13 @@ const App = {
 
 createApp( App )
 	.component( "loading-veil", LoadingVeil )
+	.component( "party-toolbar", PartyToolbar )
 	.use( router )
 	.provide( "socket", socket )
 	.provide( "gameState", gameState )
 	.provide( "api", api )
-	.provide( "setCurrentUser", ( u ) => { currentUser.value = u; } )
+	.provide( "partyState", partyState )
+	.provide( "loadParty", loadParty )
+	.provide( "saveParty", saveParty )
+	.provide( "setCurrentUser", ( u ) => { currentUser.value = u; if ( u ) loadParty(); } )
 	.mount( "#app" );

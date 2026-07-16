@@ -29,7 +29,7 @@ CREATE TABLE `adventure_map_chunks` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `uq_map_chunk` (`map_id`,`chunk_x`,`chunk_y`),
   CONSTRAINT `fk_chunks_map` FOREIGN KEY (`map_id`) REFERENCES `adventure_maps` (`id`) ON DELETE CASCADE
-) ENGINE=InnoDB AUTO_INCREMENT=135 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=175 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 DROP TABLE IF EXISTS `adventure_map_pois`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
@@ -45,7 +45,7 @@ CREATE TABLE `adventure_map_pois` (
   PRIMARY KEY (`id`),
   KEY `idx_pois_map_xy` (`map_id`,`x`,`y`),
   CONSTRAINT `fk_pois_map` FOREIGN KEY (`map_id`) REFERENCES `adventure_maps` (`id`) ON DELETE CASCADE
-) ENGINE=InnoDB AUTO_INCREMENT=426 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=559 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 DROP TABLE IF EXISTS `adventure_maps`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
@@ -69,7 +69,7 @@ CREATE TABLE `adventure_maps` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `uq_module_map` (`module_id`,`slug`),
   CONSTRAINT `fk_maps_module` FOREIGN KEY (`module_id`) REFERENCES `adventure_modules` (`id`) ON DELETE CASCADE
-) ENGINE=InnoDB AUTO_INCREMENT=24 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=30 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 DROP TABLE IF EXISTS `adventure_modules`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
@@ -87,7 +87,7 @@ CREATE TABLE `adventure_modules` (
   UNIQUE KEY `uq_adventure_modules_slug` (`slug`),
   KEY `idx_modules_owner` (`owner_user_id`),
   CONSTRAINT `fk_modules_owner` FOREIGN KEY (`owner_user_id`) REFERENCES `users` (`id`)
-) ENGINE=InnoDB AUTO_INCREMENT=19 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=25 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 DROP TABLE IF EXISTS `armors`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
@@ -142,7 +142,7 @@ CREATE TABLE `character_armor` (
   KEY `fk_character_armor_armor` (`armor_id`),
   CONSTRAINT `fk_character_armor_armor` FOREIGN KEY (`armor_id`) REFERENCES `armors` (`id`) ON DELETE CASCADE,
   CONSTRAINT `fk_character_armor_character` FOREIGN KEY (`character_id`) REFERENCES `characters` (`id`) ON DELETE CASCADE
-) ENGINE=InnoDB AUTO_INCREMENT=10 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=45 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 DROP TABLE IF EXISTS `character_feats`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
@@ -157,7 +157,7 @@ CREATE TABLE `character_feats` (
   KEY `fk_character_feats_feat` (`feat_id`),
   CONSTRAINT `fk_character_feats_character` FOREIGN KEY (`character_id`) REFERENCES `characters` (`id`) ON DELETE CASCADE,
   CONSTRAINT `fk_character_feats_feat` FOREIGN KEY (`feat_id`) REFERENCES `feats` (`id`) ON DELETE CASCADE
-) ENGINE=InnoDB AUTO_INCREMENT=34 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=561 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 DROP TABLE IF EXISTS `character_features`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
@@ -172,7 +172,7 @@ CREATE TABLE `character_features` (
   KEY `fk_character_features_feature` (`class_feature_id`),
   CONSTRAINT `fk_character_features_character` FOREIGN KEY (`character_id`) REFERENCES `characters` (`id`) ON DELETE CASCADE,
   CONSTRAINT `fk_character_features_feature` FOREIGN KEY (`class_feature_id`) REFERENCES `class_features` (`id`) ON DELETE CASCADE
-) ENGINE=InnoDB AUTO_INCREMENT=248 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=952 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 DROP TABLE IF EXISTS `character_inventory`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
@@ -193,7 +193,7 @@ CREATE TABLE `character_inventory` (
   KEY `fk_character_inventory_weapon` (`weapon_id`),
   CONSTRAINT `fk_character_inventory_character` FOREIGN KEY (`character_id`) REFERENCES `characters` (`id`) ON DELETE CASCADE,
   CONSTRAINT `fk_character_inventory_weapon` FOREIGN KEY (`weapon_id`) REFERENCES `weapons` (`id`)
-) ENGINE=InnoDB AUTO_INCREMENT=169 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=676 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 DROP TABLE IF EXISTS `character_items`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
@@ -210,7 +210,7 @@ CREATE TABLE `character_items` (
   KEY `fk_character_items_item` (`item_id`),
   CONSTRAINT `fk_character_items_character` FOREIGN KEY (`character_id`) REFERENCES `characters` (`id`) ON DELETE CASCADE,
   CONSTRAINT `fk_character_items_item` FOREIGN KEY (`item_id`) REFERENCES `items` (`id`) ON DELETE CASCADE
-) ENGINE=InnoDB AUTO_INCREMENT=78 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=121 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 DROP TABLE IF EXISTS `character_multiclass_levels`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
@@ -291,7 +291,7 @@ CREATE TABLE `characters` (
   CONSTRAINT `fk_characters_next_level_class` FOREIGN KEY (`next_level_class_id`) REFERENCES `classes` (`id`) ON DELETE SET NULL,
   CONSTRAINT `fk_characters_owner` FOREIGN KEY (`owner_user_id`) REFERENCES `users` (`id`),
   CONSTRAINT `fk_characters_subclass` FOREIGN KEY (`subclass_id`) REFERENCES `subclasses` (`id`) ON DELETE SET NULL
-) ENGINE=InnoDB AUTO_INCREMENT=250 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=14055 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 DROP TABLE IF EXISTS `class_features`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
@@ -455,6 +455,23 @@ CREATE TABLE `monsters` (
   KEY `idx_monsters_cr` (`cr`)
 ) ENGINE=InnoDB AUTO_INCREMENT=361 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
+DROP TABLE IF EXISTS `party_members`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!50503 SET character_set_client = utf8mb4 */;
+CREATE TABLE `party_members` (
+  `id` int unsigned NOT NULL AUTO_INCREMENT,
+  `owner_user_id` int unsigned NOT NULL,
+  `character_id` int unsigned NOT NULL,
+  `position` tinyint unsigned NOT NULL DEFAULT '0',
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_party_owner_character` (`owner_user_id`,`character_id`),
+  KEY `idx_party_owner` (`owner_user_id`),
+  KEY `fk_party_character` (`character_id`),
+  CONSTRAINT `fk_party_character` FOREIGN KEY (`character_id`) REFERENCES `characters` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_party_owner` FOREIGN KEY (`owner_user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
 DROP TABLE IF EXISTS `species`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
@@ -583,7 +600,7 @@ CREATE TABLE `users` (
   `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
   UNIQUE KEY `uq_users_username` (`username`)
-) ENGINE=InnoDB AUTO_INCREMENT=17 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=167 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 DROP TABLE IF EXISTS `weapons`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
