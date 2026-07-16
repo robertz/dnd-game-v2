@@ -60,6 +60,115 @@ const LoadingVeil = {
 	`
 };
 
+// ── CharacterCard (the rich per-character stat card — shared by the roster
+//    grid and the "Ready to Adventure" summary so both show the same detail) ─
+
+const CharacterCard = {
+	props: {
+		character:     { type: Object, required: true },
+		// The roster grid is interactive (party toggle, delete, click-to-sheet,
+		// solo); the "Ready to Adventure" summary is read-only — those saved
+		// characters aren't being re-picked, just confirmed before playing.
+		interactive:   { type: Boolean, default: true },
+		isInParty:     { type: Boolean, default: false },
+		canAddToParty: { type: Boolean, default: true }
+	},
+	emits: [ "select", "toggle-party", "delete", "play-solo" ],
+	template: `
+		<div
+			class="creation-card char-card"
+			:class="{ 'char-card-party-selected': interactive && isInParty, 'char-card-readonly': !interactive }"
+			@click="interactive && $emit( 'select', character.id )"
+		>
+			<label v-if="interactive" class="char-card-party-toggle" :title="'Add ' + character.name + ' to the party'" @click.stop>
+				<input
+					type="checkbox"
+					:checked="isInParty"
+					:disabled="!isInParty && !canAddToParty"
+					@change="$emit( 'toggle-party', character.id )"
+				>
+				Bring on adventure
+			</label>
+			<div class="char-card-header">
+				<h3 class="fantasy-heading">{{ character.name }}</h3>
+				<span class="char-level-badge">Lv {{ character.level }}</span>
+				<button
+					v-if="interactive"
+					type="button"
+					class="char-card-delete"
+					title="Delete character"
+					aria-label="Delete character"
+					@click.stop="$emit( 'delete', character )"
+				>&times;</button>
+			</div>
+			<p class="stat-subtitle">
+				{{ character.species }} {{ character.className }}
+				<template v-if="character.background"> · {{ character.background }}</template>
+				<template v-if="character.alignment"> · {{ character.alignment }}</template>
+			</p>
+
+			<div class="hp-bar" :title="'HP ' + character.hitPoints + '/' + character.maxHitPoints">
+				<div class="hp-bar-fill" :style="{ width: hpPercent( character ) + '%' }"></div>
+			</div>
+
+			<div class="char-card-stats">
+				<span><strong>HP</strong> {{ character.hitPoints }}/{{ character.maxHitPoints }}</span>
+				<span><strong>AC</strong> {{ character.armorClass }}</span>
+				<span><strong>Spd</strong> {{ character.speed }} ft.</span>
+				<span><strong>PB</strong> +{{ character.proficiencyBonus }}</span>
+				<span><strong>Gold</strong> {{ character.gold }}</span>
+			</div>
+
+			<div class="ability-row">
+				<span v-for="ab in abilityOrder" :key="ab" class="ability-chip">
+					<span class="ability-chip-label">{{ ab.toUpperCase() }}</span>
+					{{ character.abilities[ab] }} ({{ abilityMod( character.abilities[ab] ) }})
+				</span>
+			</div>
+
+			<div class="char-card-stats char-battle-record">
+				<span><strong>Fought</strong> {{ character.monstersFought }}</span>
+				<span><strong>Kills</strong> {{ character.monstersKilled }}</span>
+				<span v-if="character.deaths > 0"><strong>Deaths</strong> {{ character.deaths }}</span>
+			</div>
+
+			<div class="xp-row" v-if="character.nextLevelXp > 0">
+				<div class="xp-bar" :title="character.experiencePoints + ' / ' + character.nextLevelXp + ' XP'">
+					<div class="xp-bar-fill" :style="{ width: xpPercent( character ) + '%' }"></div>
+				</div>
+				<span class="stat-subtitle xp-label">{{ character.experiencePoints }} / {{ character.nextLevelXp }} XP</span>
+			</div>
+			<p v-else class="stat-subtitle xp-label">Max level · {{ character.experiencePoints }} XP</p>
+
+			<div class="char-card-footer">
+				<span class="stat-subtitle" v-if="character.lastPlayed">Last played {{ character.lastPlayed }}</span>
+				<button v-if="interactive" type="button" class="btn btn-sm btn-attack" @click.stop="$emit( 'play-solo', character.id )">Adventure Solo</button>
+			</div>
+		</div>
+	`,
+	setup() {
+		function abilityMod( score ) {
+			const mod = Math.floor( ( score - 10 ) / 2 );
+			return ( mod >= 0 ? "+" : "" ) + mod;
+		}
+
+		function hpPercent( c ) {
+			if ( !c.maxHitPoints ) return 0;
+			return Math.max( 0, Math.min( 100, c.hitPoints / c.maxHitPoints * 100 ) );
+		}
+
+		function xpPercent( c ) {
+			const span = c.nextLevelXp - c.currentLevelXp;
+			if ( span <= 0 ) return 100;
+			return Math.max( 0, Math.min( 100, ( c.experiencePoints - c.currentLevelXp ) / span * 100 ) );
+		}
+
+		const abilityOrder = [ "str", "dex", "con", "int", "wis", "cha" ];
+
+		return { abilityMod, hpPercent, xpPercent, abilityOrder };
+	}
+};
+
 // ── CharacterSelect (inline — simple enough to not need a separate file) ─────
 
 const CharacterSelect = {
@@ -85,18 +194,18 @@ const CharacterSelect = {
 				</template>
 
 				<!-- Party already set — lead with "go play," not the full roster grid;
-				     "Manage Party" is the escape hatch back into it. -->
+				     "Manage Party" is the escape hatch back into it. Same rich
+				     cards as the roster grid (just read-only) so the player can
+				     actually eyeball HP/AC/etc. before committing, not just names. -->
 				<template v-else-if="!managingParty && party.length > 0">
 					<h1 class="fantasy-heading">Ready to Adventure</h1>
-					<div class="party-continue-grid">
-						<div v-for="member in partyState.members" :key="member.id" class="creation-card party-continue-card">
-							<h3 class="fantasy-heading">{{ member.name }}</h3>
-							<p class="stat-subtitle">Lv {{ member.level }} {{ member.className }}</p>
-							<div class="hp-bar" :title="'HP ' + member.hitPoints + '/' + member.maxHitPoints">
-								<div class="hp-bar-fill" :style="{ width: hpPercent( member ) + '%' }"></div>
-							</div>
-							<span class="stat-subtitle">HP {{ member.hitPoints }}/{{ member.maxHitPoints }}</span>
-						</div>
+					<div class="char-select-grid">
+						<character-card
+							v-for="character in partyCharacters"
+							:key="character.id"
+							:character="character"
+							:interactive="false"
+						/>
 					</div>
 					<div class="turn-actions">
 						<button type="button" class="btn" @click="managingParty = true">Manage Party</button>
@@ -107,77 +216,17 @@ const CharacterSelect = {
 				<template v-else>
 					<h1 class="fantasy-heading">Choose Your Hero</h1>
 					<div class="char-select-grid">
-						<div
+						<character-card
 							v-for="character in characters"
 							:key="character.id"
-							class="creation-card char-card"
-							:class="{ 'char-card-party-selected': isInParty( character.id ) }"
-							@click="selectCharacter( character.id )"
-						>
-							<label class="char-card-party-toggle" :title="'Add ' + character.name + ' to the party'" @click.stop>
-								<input
-									type="checkbox"
-									:checked="isInParty( character.id )"
-									:disabled="!isInParty( character.id ) && party.length >= 4"
-									@change="togglePartyMember( character.id )"
-								>
-								Bring on adventure
-							</label>
-							<div class="char-card-header">
-								<h3 class="fantasy-heading">{{ character.name }}</h3>
-								<span class="char-level-badge">Lv {{ character.level }}</span>
-								<button
-									type="button"
-									class="char-card-delete"
-									title="Delete character"
-									aria-label="Delete character"
-									@click.stop="deleteCharacter( character )"
-								>&times;</button>
-							</div>
-							<p class="stat-subtitle">
-								{{ character.species }} {{ character.className }}
-								<template v-if="character.background"> · {{ character.background }}</template>
-								<template v-if="character.alignment"> · {{ character.alignment }}</template>
-							</p>
-
-							<div class="hp-bar" :title="'HP ' + character.hitPoints + '/' + character.maxHitPoints">
-								<div class="hp-bar-fill" :style="{ width: hpPercent( character ) + '%' }"></div>
-							</div>
-
-							<div class="char-card-stats">
-								<span><strong>HP</strong> {{ character.hitPoints }}/{{ character.maxHitPoints }}</span>
-								<span><strong>AC</strong> {{ character.armorClass }}</span>
-								<span><strong>Spd</strong> {{ character.speed }} ft.</span>
-								<span><strong>PB</strong> +{{ character.proficiencyBonus }}</span>
-								<span><strong>Gold</strong> {{ character.gold }}</span>
-							</div>
-
-							<div class="ability-row">
-								<span v-for="ab in abilityOrder" :key="ab" class="ability-chip">
-									<span class="ability-chip-label">{{ ab.toUpperCase() }}</span>
-									{{ character.abilities[ab] }} ({{ abilityMod( character.abilities[ab] ) }})
-								</span>
-							</div>
-
-							<div class="char-card-stats char-battle-record">
-								<span><strong>Fought</strong> {{ character.monstersFought }}</span>
-								<span><strong>Kills</strong> {{ character.monstersKilled }}</span>
-								<span v-if="character.deaths > 0"><strong>Deaths</strong> {{ character.deaths }}</span>
-							</div>
-
-							<div class="xp-row" v-if="character.nextLevelXp > 0">
-								<div class="xp-bar" :title="character.experiencePoints + ' / ' + character.nextLevelXp + ' XP'">
-									<div class="xp-bar-fill" :style="{ width: xpPercent( character ) + '%' }"></div>
-								</div>
-								<span class="stat-subtitle xp-label">{{ character.experiencePoints }} / {{ character.nextLevelXp }} XP</span>
-							</div>
-							<p v-else class="stat-subtitle xp-label">Max level · {{ character.experiencePoints }} XP</p>
-
-							<div class="char-card-footer">
-								<span class="stat-subtitle" v-if="character.lastPlayed">Last played {{ character.lastPlayed }}</span>
-								<button type="button" class="btn btn-sm btn-attack" @click.stop="playCharacter( character.id )">Adventure Solo</button>
-							</div>
-						</div>
+							:character="character"
+							:is-in-party="isInParty( character.id )"
+							:can-add-to-party="party.length < 4"
+							@select="selectCharacter"
+							@toggle-party="togglePartyMember"
+							@delete="deleteCharacter"
+							@play-solo="playCharacter"
+						/>
 					</div>
 					<div class="turn-actions">
 						<router-link class="btn btn-auto-battle" to="/character/new">Create New Character</router-link>
@@ -205,6 +254,12 @@ const CharacterSelect = {
 		// as a plain id array here since that's what isInParty()/toggle/start
 		// already work with, and what localStorage.partyCharIds expects.
 		const party = computed( () => partyState.members.map( ( m ) => m.id ) );
+		// The full (richer) character records for whoever's in the party —
+		// partyState.members only carries the toolbar's lighter summary
+		// fields, but the "Ready to Adventure" cards want the same detail
+		// the roster grid shows, so this cross-references the already-loaded
+		// characters list instead of adding a second API shape.
+		const partyCharacters = computed( () => characters.value.filter( ( c ) => isInParty( c.id ) ) );
 
 		onMounted( async () => {
 			try {
@@ -269,29 +324,10 @@ const CharacterSelect = {
 			router.push( "/adventure" );
 		}
 
-		function abilityMod( score ) {
-			const mod = Math.floor( ( score - 10 ) / 2 );
-			return ( mod >= 0 ? "+" : "" ) + mod;
-		}
-
-		function hpPercent( c ) {
-			if ( !c.maxHitPoints ) return 0;
-			return Math.max( 0, Math.min( 100, c.hitPoints / c.maxHitPoints * 100 ) );
-		}
-
-		function xpPercent( c ) {
-			const span = c.nextLevelXp - c.currentLevelXp;
-			if ( span <= 0 ) return 100;
-			return Math.max( 0, Math.min( 100, ( c.experiencePoints - c.currentLevelXp ) / span * 100 ) );
-		}
-
-		const abilityOrder = [ "str", "dex", "con", "int", "wis", "cha" ];
-
 		return {
-			characters, loading, error, party, partyState, managingParty,
+			characters, loading, error, party, partyCharacters, managingParty,
 			selectCharacter, playCharacter, deleteCharacter, isInParty,
-			togglePartyMember, startPartyAdventure,
-			abilityMod, hpPercent, xpPercent, abilityOrder
+			togglePartyMember, startPartyAdventure
 		};
 	}
 };
@@ -531,6 +567,7 @@ const App = {
 
 createApp( App )
 	.component( "loading-veil", LoadingVeil )
+	.component( "character-card", CharacterCard )
 	.component( "party-toolbar", PartyToolbar )
 	.use( router )
 	.provide( "socket", socket )

@@ -1620,25 +1620,17 @@ main.scroll {
 	margin: 1rem 0;
 }
 
-/* The "Ready to Adventure" landing summary — a lighter-weight readout of
-   the saved party than the full .char-select-grid cards (no proficiency
-   toggle, no ability scores), since its job is just to confirm who's
-   coming before hitting Start Adventure, not to manage the roster. */
-.party-continue-grid {
-	display: grid;
-	grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-	gap: 1rem;
-	margin: 1rem 0;
-}
-
-.party-continue-card {
+/* The "Ready to Adventure" summary reuses .char-select-grid/.char-card
+   itself (via <character-card :interactive="false">) rather than a
+   lighter-weight card, so the player can see real HP/AC/etc. before
+   committing — .char-card-readonly just drops the pointer/hover-lift
+   affordance that no longer applies once the toggle/delete/solo controls
+   are hidden. */
+.char-card-readonly {
 	cursor: default;
-	display: flex;
-	flex-direction: column;
-	gap: 0.35rem;
 }
 
-.party-continue-card:hover {
+.char-card-readonly:hover {
 	transform: none;
 	box-shadow: none;
 	border-color: var(--gold);
