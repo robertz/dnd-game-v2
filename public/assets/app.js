@@ -66,21 +66,46 @@ const CharacterSelect = {
 	template: `
 		<div class="encounter">
 			<div class="encounter-main">
-				<h1 class="fantasy-heading">Choose Your Hero</h1>
-
 				<template v-if="loading">
+					<h1 class="fantasy-heading">Choose Your Hero</h1>
 					<loading-veil label="Summoning adventurers..." />
 				</template>
 
 				<template v-else-if="error">
+					<h1 class="fantasy-heading">Choose Your Hero</h1>
 					<p class="encounter-intro">{{ error }}</p>
 				</template>
 
 				<template v-else-if="characters.length === 0">
+					<h1 class="fantasy-heading">Choose Your Hero</h1>
 					<p class="encounter-intro">No adventurers yet — create one to begin.</p>
+					<div class="turn-actions">
+						<router-link class="btn btn-auto-battle" to="/character/new">Create New Character</router-link>
+					</div>
+				</template>
+
+				<!-- Party already set — lead with "go play," not the full roster grid;
+				     "Manage Party" is the escape hatch back into it. -->
+				<template v-else-if="!managingParty && party.length > 0">
+					<h1 class="fantasy-heading">Ready to Adventure</h1>
+					<div class="party-continue-grid">
+						<div v-for="member in partyState.members" :key="member.id" class="creation-card party-continue-card">
+							<h3 class="fantasy-heading">{{ member.name }}</h3>
+							<p class="stat-subtitle">Lv {{ member.level }} {{ member.className }}</p>
+							<div class="hp-bar" :title="'HP ' + member.hitPoints + '/' + member.maxHitPoints">
+								<div class="hp-bar-fill" :style="{ width: hpPercent( member ) + '%' }"></div>
+							</div>
+							<span class="stat-subtitle">HP {{ member.hitPoints }}/{{ member.maxHitPoints }}</span>
+						</div>
+					</div>
+					<div class="turn-actions">
+						<button type="button" class="btn" @click="managingParty = true">Manage Party</button>
+						<button type="button" class="btn btn-attack" @click="startPartyAdventure">Start Adventure ({{ party.length }}/4)</button>
+					</div>
 				</template>
 
 				<template v-else>
+					<h1 class="fantasy-heading">Choose Your Hero</h1>
 					<div class="char-select-grid">
 						<div
 							v-for="character in characters"
@@ -154,17 +179,16 @@ const CharacterSelect = {
 							</div>
 						</div>
 					</div>
+					<div class="turn-actions">
+						<router-link class="btn btn-auto-battle" to="/character/new">Create New Character</router-link>
+						<button
+							v-if="party.length > 0"
+							type="button"
+							class="btn btn-attack"
+							@click="managingParty = false"
+						>Done — Continue ({{ party.length }}/4)</button>
+					</div>
 				</template>
-
-				<div class="turn-actions">
-					<router-link class="btn btn-auto-battle" to="/character/new">Create New Character</router-link>
-					<button
-						v-if="party.length > 0"
-						type="button"
-						class="btn btn-attack"
-						@click="startPartyAdventure"
-					>Start Adventure with Party ({{ party.length }}/4)</button>
-				</div>
 			</div>
 		</div>
 	`,
@@ -173,6 +197,10 @@ const CharacterSelect = {
 		const characters = ref( [] );
 		const loading    = ref( true );
 		const error      = ref( "" );
+		// Starts false so a returning user with a saved party lands on the
+		// "Ready to Adventure" summary instead of the full roster grid; set
+		// true by "Manage Party" and back to false by "Done — Continue".
+		const managingParty = ref( false );
 		// Read-through view of the shared, server-persisted partyState — kept
 		// as a plain id array here since that's what isInParty()/toggle/start
 		// already work with, and what localStorage.partyCharIds expects.
@@ -260,8 +288,9 @@ const CharacterSelect = {
 		const abilityOrder = [ "str", "dex", "con", "int", "wis", "cha" ];
 
 		return {
-			characters, loading, error, party, selectCharacter, playCharacter,
-			deleteCharacter, isInParty, togglePartyMember, startPartyAdventure,
+			characters, loading, error, party, partyState, managingParty,
+			selectCharacter, playCharacter, deleteCharacter, isInParty,
+			togglePartyMember, startPartyAdventure,
 			abilityMod, hpPercent, xpPercent, abilityOrder
 		};
 	}
@@ -454,10 +483,11 @@ const App = {
 	setup() {
 		const route        = VueRouter.useRoute();
 		const router       = VueRouter.useRouter();
-		// localStorage isn't reactive, so a computed over it evaluates once and
-		// never updates — re-check on every navigation instead, so the nav
-		// links appear as soon as a first character is picked.
-		const hasCharacter = ref( !!localStorage.getItem( "charId" ) );
+		// Party membership (not "ever picked a character") is what actually
+		// gates these links now — reactive off partyState directly, unlike
+		// the old localStorage.charId check, which needed a manual re-read
+		// on every route change since localStorage itself isn't reactive.
+		const hasCharacter = computed( () => partyState.members.length > 0 );
 		const mobileNavOpen = ref( false );
 		const accountMenuOpen = ref( false );
 		const accountMenuEl = ref( null );
@@ -467,7 +497,6 @@ const App = {
 		Vue.watch( () => route.path, () => {
 			mobileNavOpen.value = false;
 			accountMenuOpen.value = false;
-			hasCharacter.value  = !!localStorage.getItem( "charId" );
 		} );
 
 		// Close the account dropdown on an outside click — mousedown (not

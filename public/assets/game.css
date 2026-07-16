@@ -1620,6 +1620,30 @@ main.scroll {
 	margin: 1rem 0;
 }
 
+/* The "Ready to Adventure" landing summary — a lighter-weight readout of
+   the saved party than the full .char-select-grid cards (no proficiency
+   toggle, no ability scores), since its job is just to confirm who's
+   coming before hitting Start Adventure, not to manage the roster. */
+.party-continue-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+	gap: 1rem;
+	margin: 1rem 0;
+}
+
+.party-continue-card {
+	cursor: default;
+	display: flex;
+	flex-direction: column;
+	gap: 0.35rem;
+}
+
+.party-continue-card:hover {
+	transform: none;
+	box-shadow: none;
+	border-color: var(--gold);
+}
+
 .char-card-party-selected {
 	border-color: var(--gold);
 	box-shadow: 0 0 0 1px var(--gold);
