@@ -1417,6 +1417,14 @@ main.scroll {
 	margin: 1rem 0;
 }
 
+/* The running "choices so far" recap shown above each step (see
+   choicesSoFar() in CharacterCreation.js) — a touch more breathing room
+   than .creation-detail since it now precedes the step's own content
+   rather than following it. */
+.creation-summary {
+	margin-bottom: 1.25rem;
+}
+
 /* For grids of short, fixed-width content (the ability-score value picker's
    two-digit numbers) — the default 160px minmax floor is sized for card
    titles like "Dragonborn" and wastes most of a phone's width on a single
@@ -1668,6 +1676,23 @@ main.scroll {
 	flex-wrap: wrap;
 	gap: 1rem;
 	margin: 1rem 0;
+}
+
+.ability-assign-slot {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 0.2rem;
+	min-width: 4.5rem;
+	font-family: "Cinzel Decorative", serif;
+}
+
+/* Distinct from .creation-card-selected (the slot currently targeted for
+   the next click) — a soft, non-alarming "already assigned" marker so a
+   filled slot doesn't read as urgent/interactive the way the active one
+   does. */
+.ability-assign-slot-filled {
+	border-color: rgba(212, 175, 55, 0.5);
 }
 
 .creation-input {

@@ -31,7 +31,7 @@ const CharacterCreation = {
 								v-for="skill in createdSheet.skillProficiencies"
 								:key="skill"
 								class="skill-chip"
-								:title="skillAbility(skill) + ' — adds Proficiency Bonus to ' + skill + ' checks'"
+								:title="skillTooltip(skill)"
 							>{{ skill }}</span>
 						</li>
 						<li v-if="createdSheet.feats?.length">
@@ -54,6 +54,24 @@ const CharacterCreation = {
 				<p class="encounter-intro">Step {{ step }} of {{ totalSteps }}</p>
 
 				<p v-if="formError" class="encounter-banner encounter-banner-defeat">{{ formError }}</p>
+
+				<!-- Choices so far — steps 1-5 only; step 6 shows the same list as its own Review below -->
+				<div v-if="step < totalSteps && choicesSoFar.length" class="stat-card creation-summary">
+					<h3 class="fantasy-heading">Your Choices So Far</h3>
+					<ul class="stat-list">
+						<li v-for="item in choicesSoFar" :key="item.label">
+							<strong>{{ item.label }}</strong>
+							<template v-if="item.skills">
+								<span
+									v-for="skill in item.skills" :key="skill"
+									class="skill-chip"
+									:title="skillTooltip(skill)"
+								>{{ skill }}</span>
+							</template>
+							<template v-else>{{ item.text }}</template>
+						</li>
+					</ul>
+				</div>
 
 				<!-- Step 1: Class -->
 				<template v-if="step === 1">
@@ -83,7 +101,7 @@ const CharacterCreation = {
 									:key="skill"
 									class="creation-card creation-card-compact"
 									:class="{ 'creation-card-selected': selectedClassSkills.includes(skill) }"
-									:title="skillAbility(skill) + ' — adds your Proficiency Bonus to ' + skill + ' checks'"
+									:title="skillTooltip(skill)"
 									@click="toggleClassSkill(skill)"
 								>{{ skill }}</div>
 							</div>
@@ -115,6 +133,7 @@ const CharacterCreation = {
 							:key="opt.name"
 							class="creation-card creation-card-compact"
 							:class="{ 'creation-card-selected': selectedSpecies === opt.name }"
+							:title="speciesTooltip(opt.detail)"
 							@click="selectSpecies(opt.name)"
 						>{{ opt.name }}</div>
 					</div>
@@ -127,6 +146,7 @@ const CharacterCreation = {
 								:key="sub"
 								class="creation-card creation-card-compact"
 								:class="{ 'creation-card-selected': selectedSubrace === sub }"
+								:title="speciesTooltip(selectedSpeciesOption.subraceDetails[sub])"
 								@click="selectSubrace(sub)"
 							>{{ sub }}</div>
 						</div>
@@ -179,7 +199,7 @@ const CharacterCreation = {
 									:key="skill"
 									class="creation-card creation-card-compact"
 									:class="{ 'creation-card-selected': selectedSpeciesSkills.includes(skill) }"
-									:title="skillAbility(skill)"
+									:title="skillTooltip(skill)"
 									@click="toggleSpeciesSkill(skill)"
 								>{{ skill }}</div>
 							</div>
@@ -218,7 +238,22 @@ const CharacterCreation = {
 				<template v-if="step === 3">
 					<h2 class="fantasy-heading">Ability Scores</h2>
 					<p v-if="selectedClass" class="stat-subtitle">{{ selectedClass.name }}'s primary attribute: <strong>{{ selectedClass.primaryAbility }}</strong> — assign your highest score there.</p>
-					<p class="stat-subtitle">Click a value to assign it to the next ability (STR, DEX, CON, INT, WIS, CHA in order).</p>
+					<p class="stat-subtitle">
+						Click an ability to target it, then click a value to assign it there.
+						<template v-if="activeAbility"> Assigning to <strong>{{ activeAbility.toUpperCase() }}</strong> next.</template>
+					</p>
+
+					<ul class="stat-list creation-scores">
+						<li
+							v-for="ability in ABILITY_ORDER" :key="ability"
+							class="creation-card ability-assign-slot"
+							:class="{ 'creation-card-selected': activeAbility === ability, 'ability-assign-slot-filled': ability in assignedScores }"
+							@click="selectAbilitySlot(ability)"
+						>
+							<strong>{{ ability.toUpperCase() }}</strong>
+							<span>{{ assignedScores[ability] ?? '—' }}</span>
+						</li>
+					</ul>
 
 					<div class="creation-grid creation-grid-sm">
 						<div
@@ -228,13 +263,6 @@ const CharacterCreation = {
 							@click="assignScore(value)"
 						>{{ value }}</div>
 					</div>
-
-					<ul class="stat-list creation-scores">
-						<li v-for="ability in ABILITY_ORDER" :key="ability">
-							<strong>{{ ability.toUpperCase() }}</strong>
-							{{ assignedScores[ability] ?? '—' }}
-						</li>
-					</ul>
 
 					<button type="button" class="btn btn-end-turn" @click="resetScores">Reset</button>
 				</template>
@@ -303,41 +331,17 @@ const CharacterCreation = {
 					<div class="stat-card">
 						<h3 class="fantasy-heading">Review</h3>
 						<ul class="stat-list">
-							<li><strong>Class</strong> {{ selectedClass?.name }}</li>
-							<li v-if="selectedClassSkills.length">
-								<strong>Class Skills</strong>
-								<span
-									v-for="skill in selectedClassSkills"
-									:key="skill"
-									class="skill-chip"
-									:title="skillAbility(skill)"
-								>{{ skill }}</span>
+							<li v-for="item in choicesSoFar" :key="item.label">
+								<strong>{{ item.label }}</strong>
+								<template v-if="item.skills">
+									<span
+										v-for="skill in item.skills" :key="skill"
+										class="skill-chip"
+										:title="skillTooltip(skill)"
+									>{{ skill }}</span>
+								</template>
+								<template v-else>{{ item.text }}</template>
 							</li>
-							<li v-if="selectedFightingStyle">
-								<strong>Fighting Style</strong> {{ selectedFightingStyle }}
-							</li>
-							<li><strong>Species</strong> {{ effectiveSpeciesName }}</li>
-							<li><strong>Background</strong> {{ selectedBackground }}</li>
-							<li><strong>Alignment</strong> {{ selectedAlignment }}</li>
-							<li>
-								<strong>Base Ability Scores</strong>
-								STR {{ assignedScores.str }}, DEX {{ assignedScores.dex }}, CON {{ assignedScores.con }},
-								INT {{ assignedScores.int }}, WIS {{ assignedScores.wis }}, CHA {{ assignedScores.cha }}
-							</li>
-							<li v-if="selectedSpeciesSkills.length">
-								<strong>Species Skills</strong>
-								<span
-									v-for="skill in selectedSpeciesSkills"
-									:key="skill"
-									class="skill-chip"
-									:title="skillAbility(skill)"
-								>{{ skill }}</span>
-							</li>
-							<li v-if="abilityBonusSummary(selectedSpeciesDetail)">
-								<strong>Species Bonus</strong> {{ abilityBonusSummary(selectedSpeciesDetail) }}
-							</li>
-							<li v-if="selectedCantripName"><strong>Cantrip</strong> {{ selectedCantripName }}</li>
-							<li v-if="selectedSpellName"><strong>1st-Level Spell</strong> {{ selectedSpellName }}</li>
 						</ul>
 					</div>
 				</template>
@@ -375,6 +379,31 @@ const CharacterCreation = {
 		};
 		const ALL_SKILL_NAMES = Object.keys( SKILL_ABILITY );
 
+		// What each skill actually lets you do at the table — the ability
+		// score alone (e.g. "Intelligence" for Religion) doesn't tell a new
+		// player what the skill covers in play, which was the actual point of
+		// confusion (see the tooltip these feed — skillTooltip()).
+		const SKILL_DESCRIPTIONS = {
+			'Acrobatics':       'Stay on your feet or slip free — tumbling, balancing, wriggling out of a grapple.',
+			'Animal Handling':  'Calm, control, or read the intentions of an animal.',
+			'Arcana':           'Recall lore about spells, magic items, planes, and magical traditions.',
+			'Athletics':        'Climb, jump, swim, or force your way through — anything physically strenuous.',
+			'Deception':        'Convincingly hide the truth, whether in words or actions.',
+			'History':          'Recall lore about past events, civilizations, wars, and lost kingdoms.',
+			'Insight':          "Read a creature's true intentions — catch a lie, sense a hidden motive.",
+			'Intimidation':     'Influence someone through threats, hostile actions, or force of presence.',
+			'Investigation':    'Deduce clues, spot hidden details, or figure out how something works.',
+			'Medicine':         'Diagnose illness, stabilize the dying, or judge a cause of death.',
+			'Nature':           'Recall lore about terrain, plants, animals, and natural weather patterns.',
+			'Perception':       'Notice things — spot a hidden foe, hear a whisper, catch a passing detail.',
+			'Performance':      'Entertain an audience with music, dance, acting, or storytelling.',
+			'Persuasion':       'Influence someone through tact, social grace, or genuine goodwill.',
+			'Religion':         'Recall lore about deities, rites, holy symbols, and religious hierarchies.',
+			'Sleight of Hand':  'Plant something, lift a pocket, or otherwise be sneaky with your hands.',
+			'Stealth':          'Conceal yourself, move silently, or slip past a watchful guard.',
+			'Survival':         'Track quarry, forage, navigate the wild, or avoid natural hazards.'
+		};
+
 		// ── Wizard state ───────────────────────────────────────────────────────
 		const step       = ref( 1 );
 		const totalSteps = 6;
@@ -402,8 +431,9 @@ const CharacterCreation = {
 		const selectedBackground     = ref( '' );
 
 		// Step 3 — Ability Scores
-		const standardArray  = ref( [ 15, 14, 13, 12, 10, 8 ] );
-		const assignedScores = ref( {} );
+		const standardArray   = ref( [ 15, 14, 13, 12, 10, 8 ] );
+		const assignedScores  = ref( {} );
+		const selectedAbility = ref( '' );
 
 		// Step 4 — Alignment
 		const selectedAlignment = ref( '' );
@@ -448,9 +478,61 @@ const CharacterCreation = {
 			cantripOptions.value.length > 0 || spellOptions.value.length > 0
 		);
 
+		// Drives both the persistent "choices so far" panel (steps 1-5) and
+		// step 6's Review — one source of truth so the two never drift, and
+		// each entry only appears once its choice has actually been made.
+		const choicesSoFar = computed( () => {
+			const items = [];
+			if ( selectedClass.value ) items.push( { label: 'Class', text: selectedClass.value.name } );
+			if ( selectedClassSkills.value.length ) items.push( { label: 'Class Skills', skills: selectedClassSkills.value } );
+			if ( selectedFightingStyle.value ) items.push( { label: 'Fighting Style', text: selectedFightingStyle.value } );
+			if ( selectedSpecies.value ) items.push( { label: 'Species', text: effectiveSpeciesName.value } );
+			if ( selectedSpeciesSkills.value.length ) items.push( { label: 'Species Skills', skills: selectedSpeciesSkills.value } );
+			const speciesBonus = abilityBonusSummary( selectedSpeciesDetail.value );
+			if ( speciesBonus ) items.push( { label: 'Species Bonus', text: speciesBonus } );
+			if ( selectedBackground.value ) items.push( { label: 'Background', text: selectedBackground.value } );
+			if ( selectedAlignment.value ) items.push( { label: 'Alignment', text: selectedAlignment.value } );
+			if ( Object.keys( assignedScores.value ).length ) {
+				const s = assignedScores.value;
+				items.push( {
+					label: 'Ability Scores',
+					text: `STR ${ s.str ?? '—' }, DEX ${ s.dex ?? '—' }, CON ${ s.con ?? '—' }, INT ${ s.int ?? '—' }, WIS ${ s.wis ?? '—' }, CHA ${ s.cha ?? '—' }`
+				} );
+			}
+			if ( selectedCantripName.value ) items.push( { label: 'Cantrip', text: selectedCantripName.value } );
+			if ( selectedSpellName.value ) items.push( { label: '1st-Level Spell', text: selectedSpellName.value } );
+			return items;
+		} );
+
 		// ── Helpers ────────────────────────────────────────────────────────────
-		function skillAbility( name ) {
-			return SKILL_ABILITY[ name ] || '';
+		function skillTooltip( name ) {
+			const ability = SKILL_ABILITY[ name ];
+			const description = SKILL_DESCRIPTIONS[ name ];
+			if ( !ability || !description ) return name;
+			return `${ ability } — ${ description }`;
+		}
+
+		// A compact, hover-before-you-click summary of a species/subrace —
+		// full trait text (some of it multi-paragraph SRD rules text, e.g.
+		// Breath Weapon) already lives in the detail panel once you've picked
+		// it, so this only lists trait names plus the core numbers, not their
+		// full descriptions.
+		function speciesTooltip( detail ) {
+			if ( !detail ) return '';
+			const lines = [];
+
+			let coreLine = detail.size || '';
+			if ( detail.speed ) coreLine += ( coreLine ? ' — ' : '' ) + `Speed ${ detail.speed } ft`;
+			if ( detail.darkvision > 0 ) coreLine += ` — Darkvision ${ detail.darkvision } ft`;
+			if ( coreLine ) lines.push( coreLine );
+
+			const bonus = abilityBonusSummary( detail );
+			if ( bonus ) lines.push( `Ability Bonus: ${ bonus }` );
+
+			if ( detail.resistances?.length ) lines.push( `Resistances: ${ detail.resistances.join( ', ' ) }` );
+			if ( detail.traits?.length ) lines.push( `Traits: ${ detail.traits.map( t => t.name ).join( ', ' ) }` );
+
+			return lines.join( '\n' );
 		}
 
 		function abilityBonusSummary( detail ) {
@@ -562,20 +644,42 @@ const CharacterCreation = {
 		}
 
 		// ── Step 3 actions ─────────────────────────────────────────────────────
-		function assignScore( value ) {
-			for ( const ability of ABILITY_ORDER ) {
-				if ( !( ability in assignedScores.value ) ) {
-					assignedScores.value[ ability ] = value;
-					standardArray.value = standardArray.value.filter( v => v !== value );
-					formError.value = '';
-					return;
-				}
+		// The ability a clicked value goes to: whichever one was manually
+		// targeted via selectAbilitySlot(), or (once that's filled, or if
+		// nothing's been targeted yet) the first still-empty ability in fixed
+		// order — same default sequence as before, just now overridable.
+		const activeAbility = computed( () => {
+			if ( selectedAbility.value && !( selectedAbility.value in assignedScores.value ) ) {
+				return selectedAbility.value;
 			}
+			return ABILITY_ORDER.find( a => !( a in assignedScores.value ) ) ?? '';
+		} );
+
+		function selectAbilitySlot( ability ) {
+			if ( ability in assignedScores.value ) {
+				// Clicking an already-filled slot frees its value back into the
+				// pool and targets that slot next, so swapping two assignments
+				// doesn't require a full reset.
+				standardArray.value.push( assignedScores.value[ ability ] );
+				standardArray.value.sort( ( a, b ) => b - a );
+				delete assignedScores.value[ ability ];
+			}
+			selectedAbility.value = ability;
+		}
+
+		function assignScore( value ) {
+			const ability = activeAbility.value;
+			if ( !ability ) return;
+			assignedScores.value[ ability ] = value;
+			standardArray.value = standardArray.value.filter( v => v !== value );
+			selectedAbility.value = '';
+			formError.value = '';
 		}
 
 		function resetScores() {
-			assignedScores.value = {};
-			standardArray.value  = [ 15, 14, 13, 12, 10, 8 ];
+			assignedScores.value  = {};
+			standardArray.value   = [ 15, 14, 13, 12, 10, 8 ];
+			selectedAbility.value = '';
 		}
 
 		// ── Step 4 actions ─────────────────────────────────────────────────────
@@ -718,14 +822,14 @@ const CharacterCreation = {
 			selectedSpecies, selectedSubrace, selectedSpeciesOption, selectedSpeciesDetail,
 			selectedBackgroundDetail, selectedChoiceAbilities, selectedSpeciesSkills,
 			choiceAbilityOptions, selectedBackground,
-			standardArray, assignedScores,
+			standardArray, assignedScores, activeAbility,
 			selectedAlignment,
 			characterName, createdCharacterId, createdSheet,
-			effectiveSpeciesName, hasSpellOptions,
-			skillAbility, abilityBonusSummary, describeSpellOption,
+			effectiveSpeciesName, hasSpellOptions, choicesSoFar,
+			skillTooltip, speciesTooltip, abilityBonusSummary, describeSpellOption,
 			selectClass, toggleClassSkill, selectFightingStyle,
 			selectSpecies, selectSubrace, toggleChoiceAbility, toggleSpeciesSkill, selectBackground,
-			assignScore, resetScores,
+			selectAbilitySlot, assignScore, resetScores,
 			selectAlignment,
 			selectCantrip, selectSpell,
 			nextStep, previousStep, createCharacter, beginAdventure
