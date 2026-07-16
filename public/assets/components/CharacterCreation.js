@@ -276,6 +276,7 @@ const CharacterCreation = {
 							:key="opt"
 							class="creation-card creation-card-compact"
 							:class="{ 'creation-card-selected': selectedAlignment === opt }"
+							:title="ALIGNMENT_DESCRIPTIONS[opt]"
 							@click="selectAlignment(opt)"
 						>{{ opt }}</div>
 					</div>
@@ -369,6 +370,21 @@ const CharacterCreation = {
 			'Lawful Neutral','True Neutral',  'Chaotic Neutral',
 			'Lawful Evil',   'Neutral Evil',  'Chaotic Evil'
 		];
+
+		// What each alignment actually plays like at the table, not just the
+		// law/chaos-good/evil axis labels — same "explain it in context"
+		// tooltip pattern as SKILL_DESCRIPTIONS.
+		const ALIGNMENT_DESCRIPTIONS = {
+			'Lawful Good':    'Acts as a good person is expected or required to — combines honor with compassion.',
+			'Neutral Good':   'Does the best good can do, without bias for or against order — helps by whatever means work.',
+			'Chaotic Good':   "Follows their own conscience, not others' expectations — kind and benevolent, but wary of authority.",
+			'Lawful Neutral': 'Believes strongly in order, tradition, or a personal code, above notions of good or evil.',
+			'True Neutral':   "Sees good, evil, law, and chaos as equally flawed extremes — prefers balance, or simply doesn't take a side.",
+			'Chaotic Neutral':'Follows their own whims above all else — an individualist first, not deliberately evil.',
+			'Lawful Evil':    'Methodically takes what they want within a code of tradition, loyalty, or order — a tyrant, not an anarchist.',
+			'Neutral Evil':   'Does whatever they can get away with, without compassion or qualms — evil for its own sake or simple greed.',
+			'Chaotic Evil':   "Acts with arbitrary violence, spurred by greed, hatred, or bloodlust — no respect for rules or others' lives."
+		};
 		const SKILL_ABILITY = {
 			'Acrobatics': 'Dexterity',    'Animal Handling': 'Wisdom',   'Arcana': 'Intelligence',
 			'Athletics': 'Strength',      'Deception': 'Charisma',       'History': 'Intelligence',
@@ -815,7 +831,7 @@ const CharacterCreation = {
 
 		return {
 			step, totalSteps, loading, submitting, formError,
-			ABILITY_ORDER, ALIGNMENT_OPTIONS, ALL_SKILL_NAMES,
+			ABILITY_ORDER, ALIGNMENT_OPTIONS, ALIGNMENT_DESCRIPTIONS, ALL_SKILL_NAMES,
 			classes, selectedClassId, selectedClass, selectedClassSkills, selectedFightingStyle,
 			cantripOptions, spellOptions, selectedCantripName, selectedSpellName,
 			speciesOptions, backgroundOptions,

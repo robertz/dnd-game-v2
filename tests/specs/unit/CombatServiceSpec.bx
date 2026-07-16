@@ -667,6 +667,78 @@ class extends="testbox.system.BaseSpec" {
 					expect( service.skillCheckBonus( combatant, "Insight" ) ).toBe( 3 );
 				} );
 
+				describe( "isProficientWithWeapon()", () => {
+					it( "grants every Simple weapon to a Simple-weapons-only class", () => {
+						var dagger = { "name": "Dagger", "category": "Simple", "properties": "Finesse, Light, Thrown (Range 20/60)" };
+						expect( service.isProficientWithWeapon( "Simple weapons", [], dagger ) ).toBeTrue();
+					} );
+
+					it( "refuses a Martial weapon to a Simple-weapons-only class", () => {
+						var longsword = { "name": "Longsword", "category": "Martial", "properties": "Versatile (1d10)" };
+						expect( service.isProficientWithWeapon( "Simple weapons", [], longsword ) ).toBeFalse();
+					} );
+
+					it( "grants every weapon to a Simple-and-Martial class", () => {
+						var greatsword = { "name": "Greatsword", "category": "Martial", "properties": "Heavy, Two-Handed" };
+						expect( service.isProficientWithWeapon( "Simple and Martial weapons", [], greatsword ) ).toBeTrue();
+					} );
+
+					it( "restricts a Monk's Martial access to weapons with the Light property", () => {
+						var text = "Simple weapons and Martial weapons that have the Light property";
+						var scimitar = { "name": "Scimitar", "category": "Martial", "properties": "Finesse, Light" };
+						var longsword = { "name": "Longsword", "category": "Martial", "properties": "Versatile (1d10)" };
+						expect( service.isProficientWithWeapon( text, [], scimitar ) ).toBeTrue();
+						expect( service.isProficientWithWeapon( text, [], longsword ) ).toBeFalse();
+					} );
+
+					it( "restricts a Rogue's Martial access to Finesse-or-Light weapons", () => {
+						var text = "Simple weapons and Martial weapons that have the Finesse or Light property";
+						var rapier = { "name": "Rapier", "category": "Martial", "properties": "Finesse" };
+						var greataxe = { "name": "Greataxe", "category": "Martial", "properties": "Heavy, Two-Handed" };
+						expect( service.isProficientWithWeapon( text, [], rapier ) ).toBeTrue();
+						expect( service.isProficientWithWeapon( text, [], greataxe ) ).toBeFalse();
+					} );
+
+					it( "grants a species-specific weapon regardless of class text", () => {
+						var warhammer = { "name": "Warhammer", "category": "Martial", "properties": "Versatile (1d10)" };
+						expect( service.isProficientWithWeapon( "Simple weapons", [ "Warhammer" ], warhammer ) ).toBeTrue();
+					} );
+
+					it( "accepts an already-split properties array, not just raw text", () => {
+						var rapier = { "name": "Rapier", "category": "Martial", "properties": [ "Finesse" ] };
+						var text = "Simple weapons and Martial weapons that have the Finesse or Light property";
+						expect( service.isProficientWithWeapon( text, [], rapier ) ).toBeTrue();
+					} );
+				} );
+
+				describe( "weaponProficienciesFromTraits()", () => {
+					it( "grants Dwarven Combat Training's specific weapons", () => {
+						var names = service.weaponProficienciesFromTraits( [ "Dwarven Combat Training" ] );
+						expect( arrayFindNoCase( names, "Battleaxe" ) ).toBeGT( 0 );
+						expect( arrayFindNoCase( names, "Warhammer" ) ).toBeGT( 0 );
+						expect( arrayFindNoCase( names, "Longsword" ) ).toBe( 0 );
+					} );
+
+					it( "returns an empty array for a species with no weapon-granting trait", () => {
+						expect( service.weaponProficienciesFromTraits( [ "Lucky", "Brave" ] ).len() ).toBe( 0 );
+					} );
+				} );
+
+				describe( "isProficientWithArmor()", () => {
+					it( "matches light/medium/heavy/shield against the class's armor_training text", () => {
+						var text = "Light and Medium armor and Shields";
+						expect( service.isProficientWithArmor( text, "light" ) ).toBeTrue();
+						expect( service.isProficientWithArmor( text, "medium" ) ).toBeTrue();
+						expect( service.isProficientWithArmor( text, "shield" ) ).toBeTrue();
+						expect( service.isProficientWithArmor( text, "heavy" ) ).toBeFalse();
+					} );
+
+					it( 'is false across the board for "None" (Monk/Sorcerer/Wizard)', () => {
+						expect( service.isProficientWithArmor( "None", "light" ) ).toBeFalse();
+						expect( service.isProficientWithArmor( "None", "shield" ) ).toBeFalse();
+					} );
+				} );
+
 				it( "speciesSkillChoiceCount() totals TRAIT_SKILL_CHOICE_COUNTS matches, 0 for no matching trait", () => {
 					expect( service.speciesSkillChoiceCount( [ "Skill Versatility" ] ) ).toBe( 2 );
 					expect( service.speciesSkillChoiceCount( [ "Darkvision", "Fey Ancestry" ] ) ).toBe( 0 );

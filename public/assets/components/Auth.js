@@ -75,7 +75,25 @@ const Auth = {
 						</div>
 					</div>
 
-					<button type="submit" class="btn btn-attack auth-submit" :disabled="submitting">
+					<div v-if="mode === 'register'" class="auth-field">
+						<label for="auth-confirm-password">Confirm Password</label>
+						<div class="auth-input-wrap">
+							<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+								<rect x="5" y="10.5" width="14" height="9" rx="1.5" />
+								<path d="M8 10.5V7.5a4 4 0 0 1 8 0v3" />
+							</svg>
+							<input
+								id="auth-confirm-password"
+								v-model="confirmPassword"
+								:type="showPassword ? 'text' : 'password'"
+								autocomplete="new-password"
+								required
+							>
+						</div>
+						<p v-if="confirmPassword && passwordsMismatch" class="auth-field-error">Passwords don't match.</p>
+					</div>
+
+					<button type="submit" class="btn btn-attack auth-submit" :disabled="submitting || (mode === 'register' && passwordsMismatch)">
 						<span v-if="submitting" class="auth-spinner"></span>
 						<span>{{ submitting ? 'One moment...' : ( mode === 'login' ? 'Sign In' : 'Create Account' ) }}</span>
 					</button>
@@ -95,10 +113,16 @@ const Auth = {
 		const mode     = ref( "login" );
 		const username = ref( "" );
 		const password = ref( "" );
+		const confirmPassword = ref( "" );
 		const formError = ref( "" );
 		const submitting = ref( false );
 		const showPassword = ref( false );
 		const usernameInput = ref( null );
+
+		// Only meaningful once there's something to compare against — an
+		// empty confirm field isn't a "mismatch" yet, just unfinished (see
+		// the template's own `confirmPassword &&` guard before showing this).
+		const passwordsMismatch = computed( () => password.value !== confirmPassword.value );
 
 		function focusUsername() {
 			Vue.nextTick( () => usernameInput.value?.focus() );
@@ -109,10 +133,15 @@ const Auth = {
 		function toggleMode() {
 			mode.value = mode.value === "login" ? "register" : "login";
 			formError.value = "";
+			confirmPassword.value = "";
 			focusUsername();
 		}
 
 		async function submit() {
+			if ( mode.value === "register" && passwordsMismatch.value ) {
+				formError.value = "Passwords don't match.";
+				return;
+			}
 			submitting.value = true;
 			formError.value = "";
 			try {
@@ -139,7 +168,8 @@ const Auth = {
 		}
 
 		return {
-			mode, username, password, formError, submitting, showPassword, usernameInput,
+			mode, username, password, confirmPassword, passwordsMismatch,
+			formError, submitting, showPassword, usernameInput,
 			toggleMode, submit
 		};
 	}

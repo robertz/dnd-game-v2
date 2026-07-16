@@ -389,7 +389,11 @@ class singleton {
 			var bonusIncrease = newProficiencyBonus - player.proficiencyBonus;
 			player.proficiencyBonus = newProficiencyBonus;
 			for ( var item in player.inventory ) {
-				if ( item.equipped ) {
+				// A weapon this character isn't proficient with (see
+				// CharacterStateService.loadCharacter()'s isWeaponProficient)
+				// never had Proficiency Bonus baked into attackBonus to begin
+				// with, so a bonus increase doesn't apply to it either.
+				if ( item.equipped && ( !structKeyExists( item, "isWeaponProficient" ) || item.isWeaponProficient ) ) {
 					item.attackBonus += bonusIncrease;
 				}
 			}
@@ -753,6 +757,17 @@ class singleton {
 		if ( modDelta != 0 ) {
 			if ( arguments.abbrev == "dex" ) {
 				arguments.player.armorClass += modDelta;
+			} else if (
+				( arguments.abbrev == "con" || arguments.abbrev == "wis" ) &&
+				_grantsUnarmoredDefenseFor( arguments.player, arguments.abbrev )
+			) {
+				// Unarmored Defense folds Con (Barbarian) or Wis (Monk) into
+				// AC alongside Dex — a Dex increase is already covered above
+				// since it contributes the same way whether or not this
+				// feature applies (see CharacterStateService.loadCharacter()'s
+				// own Unarmored Defense block, which this mirrors for a
+				// level-up that happens mid-combat instead of at load time).
+				arguments.player.armorClass += modDelta;
 			}
 			for ( var item in arguments.player.inventory ) {
 				if ( item.equipped && ( ( item.category == "melee" && arguments.abbrev == "str" ) || ( item.category == "ranged" && arguments.abbrev == "dex" ) ) ) {
@@ -780,6 +795,46 @@ class singleton {
 
 		var abilityFullNames = { "str": "Strength", "dex": "Dexterity", "con": "Constitution", "int": "Intelligence", "wis": "Wisdom", "cha": "Charisma" };
 		return abilityFullNames[ arguments.abbrev ];
+	}
+
+	/**
+	 * Whether raising `player`'s Con or Wis should also raise their AC right
+	 * now — true only if they actually have Unarmored Defense (Barbarian for
+	 * Con, Monk for Wis) AND it's currently the active formula: no body
+	 * armor worn (both classes), and for the Wis/Monk case, no shield either.
+	 * Mirrors CharacterStateService.loadCharacter()'s own Unarmored Defense
+	 * block rather than sharing code with it — that one runs once at load
+	 * time, this runs on an ability increase that can happen mid-combat, and
+	 * RulesService (the natural shared home) is documented stateless/no-DB.
+	 *
+	 * A rare gap: a character multiclassed into both Barbarian and Monk whose
+	 * *other* class's formula currently dominates (e.g. raising Con while the
+	 * Wis formula gives the higher AC) still nudges armorClass by this
+	 * ability's modDelta, since this is a delta patch rather than the full
+	 * "recompute and take the higher" loadCharacter() does. Correct again the
+	 * next time the character is loaded fresh.
+	 */
+	private function _grantsUnarmoredDefenseFor( player, abbrev ) {
+		if ( !structKeyExists( arguments.player, "characterId" ) || arrayFindNoCase( arguments.player.features ?: [], "Unarmored Defense" ) == 0 ) {
+			return false;
+		}
+		var className = ( arguments.abbrev == "con" ) ? "Barbarian" : "Monk";
+		var classNames = [];
+		for ( var cls in ( arguments.player.classes ?: [] ) ) {
+			classNames.append( cls.className );
+		}
+		if ( arrayFindNoCase( classNames, className ) == 0 ) {
+			return false;
+		}
+		var wornArmorTypes = ( arguments.abbrev == "con" ) ? "a.armor_type != 'shield'" : "1=1";
+		var worn = queryExecute(
+			"SELECT 1 AS found FROM character_armor ca
+			 JOIN armors a ON a.id = ca.armor_id
+			 WHERE ca.character_id = :characterId AND ca.equipped = 1 AND #wornArmorTypes#",
+			{ "characterId": arguments.player.characterId },
+			{ datasource: "gameserver" }
+		);
+		return worn.recordCount == 0;
 	}
 
 	/**

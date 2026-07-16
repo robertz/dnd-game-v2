@@ -50,70 +50,79 @@
 		return;
 	}
 
-	switch ( action ) {
-		case "equipWeapon":
-			characterService.setEquipped( body.inventoryId, body.equipped );
-			break;
-		case "setCategory":
-			characterService.setWeaponCategory( body.inventoryId, body.category );
-			break;
-		case "addWeapon":
-			characterService.addWeaponToInventory( charId, body.weaponId, body.category );
-			break;
-		case "removeWeapon":
-			characterService.removeWeapon( body.inventoryId );
-			break;
-		case "equipArmor":
-			characterService.setArmorEquipped( charId, body.inventoryId, body.equipped );
-			break;
-		case "addArmor":
-			characterService.addArmorToInventory( charId, body.armorId );
-			break;
-		case "removeArmor":
-			characterService.removeArmor( charId, body.inventoryId );
-			break;
-		case "addItem":
-			characterService.addItemToInventory( charId, body.itemId, body.quantity );
-			break;
-		case "removeItem":
-			characterService.removeItem( body.inventoryId );
-			break;
-		case "saveSpells":
-			characterService.updateSpellChoices( charId, body.cantripName, body.spellName );
-			break;
-		case "chooseFightingStyle":
-			characterService.chooseFightingStyle( charId, body.styleName );
-			break;
-		case "chooseSubclass":
-			characterService.chooseSubclass( charId, body.subclassId );
-			break;
-		case "startMulticlass":
-			characterService.startMulticlass( charId, body.classId );
-			break;
-		case "setNextLevelClass":
-			characterService.setNextLevelClass( charId, body.classId );
-			break;
-		case "chooseCantrip":
-			characterService.chooseCantrip( charId, body.cantripName );
-			break;
-		case "chooseSpell":
-			characterService.chooseSpell( charId, body.spellName );
-			break;
-		case "chooseExpertise":
-			characterService.chooseExpertise( charId, body.skillName );
-			break;
-		case "chooseMagicInitiateCantrip":
-			combatService.chooseMagicInitiateCantrip( charId, body.cantripName );
-			break;
-		case "chooseMagicInitiateSpell":
-			combatService.chooseMagicInitiateSpell( charId, body.spellName );
-			break;
-		case "chooseFightingStyleCantrip":
-			combatService.chooseFightingStyleCantrip( charId, body.cantripName );
-			break;
-		case "changeFightingStyle":
-			combatService.changeFightingStyle( charId, body.oldStyleName, body.newStyleName );
-			break;
+	try {
+		switch ( action ) {
+			case "equipWeapon":
+				characterService.setEquipped( body.inventoryId, body.equipped );
+				break;
+			case "setCategory":
+				characterService.setWeaponCategory( body.inventoryId, body.category );
+				break;
+			case "addWeapon":
+				characterService.addWeaponToInventory( charId, body.weaponId, body.category );
+				break;
+			case "removeWeapon":
+				characterService.removeWeapon( body.inventoryId );
+				break;
+			case "equipArmor":
+				characterService.setArmorEquipped( charId, body.inventoryId, body.equipped );
+				break;
+			case "addArmor":
+				characterService.addArmorToInventory( charId, body.armorId );
+				break;
+			case "removeArmor":
+				characterService.removeArmor( charId, body.inventoryId );
+				break;
+			case "addItem":
+				characterService.addItemToInventory( charId, body.itemId, body.quantity );
+				break;
+			case "removeItem":
+				characterService.removeItem( body.inventoryId );
+				break;
+			case "saveSpells":
+				characterService.updateSpellChoices( charId, body.cantripName, body.spellName );
+				break;
+			case "chooseFightingStyle":
+				characterService.chooseFightingStyle( charId, body.styleName );
+				break;
+			case "chooseSubclass":
+				characterService.chooseSubclass( charId, body.subclassId );
+				break;
+			case "startMulticlass":
+				characterService.startMulticlass( charId, body.classId );
+				break;
+			case "setNextLevelClass":
+				characterService.setNextLevelClass( charId, body.classId );
+				break;
+			case "chooseCantrip":
+				characterService.chooseCantrip( charId, body.cantripName );
+				break;
+			case "chooseSpell":
+				characterService.chooseSpell( charId, body.spellName );
+				break;
+			case "chooseExpertise":
+				characterService.chooseExpertise( charId, body.skillName );
+				break;
+			case "chooseMagicInitiateCantrip":
+				combatService.chooseMagicInitiateCantrip( charId, body.cantripName );
+				break;
+			case "chooseMagicInitiateSpell":
+				combatService.chooseMagicInitiateSpell( charId, body.spellName );
+				break;
+			case "chooseFightingStyleCantrip":
+				combatService.chooseFightingStyleCantrip( charId, body.cantripName );
+				break;
+			case "changeFightingStyle":
+				combatService.changeFightingStyle( charId, body.oldStyleName, body.newStyleName );
+				break;
+		}
+	} catch ( any e ) {
+		if ( e.type != "NotProficient" ) {
+			rethrow;
+		}
+		bx:header statuscode="400" statustext="Bad Request";
+		writeOutput( jsonSerialize( { "error": e.message } ) );
+		return;
 	}
 
 	character = characterService.getCharacterSheet( charId );

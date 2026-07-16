@@ -837,6 +837,15 @@ class singleton {
 	 * weapon (see _unequipTwoHandedMelee()) — a shield needs a free hand,
 	 * per the "Shields" rule, and a Two-Handed weapon leaves none. Always
 	 * recalculates and persists AC afterward.
+	 *
+	 * Equipping (never unequipping) throws a NotProficient error if the
+	 * character's class isn't trained for this armor type (RulesService.
+	 * isProficientWithArmor()) — unlike a weapon you're merely worse with,
+	 * armor you haven't trained in is refused outright rather than modeling
+	 * the SRD's full "disadvantage on Strength/Dexterity checks, saves, and
+	 * attacks, and can't cast spells" penalty, which would need touching
+	 * every one of those systems for a case a player would essentially never
+	 * choose to keep active anyway.
 	 */
 	function setArmorEquipped( characterId, inventoryId, equip ) {
 		if ( arguments.equip ) {
@@ -846,6 +855,16 @@ class singleton {
 			);
 			if ( target.recordCount == 0 ) {
 				return;
+			}
+			var classRow = queryExecute(
+				"SELECT cl.armor_training FROM characters c JOIN classes cl ON cl.id = c.class_id WHERE c.id = :characterId",
+				{ "characterId": arguments.characterId }, { datasource: "gameserver" }
+			);
+			if (
+				classRow.recordCount > 0 &&
+				!combatService.isProficientWithArmor( classRow.armor_training[ 1 ], target.armor_type[ 1 ] )
+			) {
+				throw( type = "NotProficient", message = "Not proficient with #target.armor_type[ 1 ]# armor." );
 			}
 			var isShield = ( target.armor_type[ 1 ] == "shield" );
 			queryExecute(
@@ -1079,18 +1098,37 @@ class singleton {
 
 	/**
 	 * Adds a weapon to a character's inventory. Attack/damage bonuses are
-	 * computed from the character's current STR/DEX + Proficiency Bonus.
-	 * INSERT IGNORE silently skips if the character already carries that weapon.
+	 * computed from the character's current STR/DEX + Proficiency Bonus —
+	 * the latter only if the character is actually proficient with this
+	 * weapon (see RulesService.isProficientWithWeapon()); a weapon they
+	 * aren't trained with still gets added (you can carry anything), it
+	 * just won't add Proficiency Bonus to its attack roll. INSERT IGNORE
+	 * silently skips if the character already carries that weapon.
 	 */
 	function addWeaponToInventory( characterId, weaponId, category ) {
 		var charRow = queryExecute(
-			"SELECT str, dex, proficiency_bonus FROM characters WHERE id = :characterId",
+			"SELECT c.str, c.dex, c.proficiency_bonus, c.species, cl.weapon_proficiencies
+			 FROM characters c JOIN classes cl ON cl.id = c.class_id
+			 WHERE c.id = :characterId",
 			{ "characterId": arguments.characterId },
 			{ datasource: "gameserver" }
 		);
 		var abilityMod = ( arguments.category == "ranged" )
 			? combatService.abilityModifier( charRow.dex[ 1 ] )
 			: combatService.abilityModifier( charRow.str[ 1 ] );
+
+		var weaponRow = queryExecute(
+			"SELECT name, category AS weaponCategory, properties FROM weapons WHERE id = :weaponId",
+			{ "weaponId": arguments.weaponId },
+			{ datasource: "gameserver" }
+		);
+		var speciesName = isNull( charRow.species[ 1 ] ) ? "" : charRow.species[ 1 ];
+		var speciesTraitNames = arrayMap( resolveSpecies( speciesName ).traits, ( t ) => t.name );
+		var speciesGrantedWeaponNames = combatService.weaponProficienciesFromTraits( speciesTraitNames );
+		var isProficient = weaponRow.recordCount > 0 && combatService.isProficientWithWeapon(
+			charRow.weapon_proficiencies[ 1 ], speciesGrantedWeaponNames,
+			{ "name": weaponRow.name[ 1 ], "category": weaponRow.weaponCategory[ 1 ], "properties": weaponRow.properties[ 1 ] }
+		);
 
 		queryExecute(
 			"INSERT IGNORE INTO character_inventory
@@ -1100,7 +1138,7 @@ class singleton {
 				"characterId": arguments.characterId,
 				"weaponId": arguments.weaponId,
 				"category": arguments.category,
-				"attackBonus": abilityMod + charRow.proficiency_bonus[ 1 ],
+				"attackBonus": abilityMod + ( isProficient ? charRow.proficiency_bonus[ 1 ] : 0 ),
 				"damageBonus": abilityMod
 			},
 			{ datasource: "gameserver" }

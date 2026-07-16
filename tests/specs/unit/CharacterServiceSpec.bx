@@ -66,6 +66,69 @@ class extends="testbox.system.BaseSpec" {
 				service.deleteCharacter( characterId = charId, ownerUserId = variables.ownerUserId );
 			} );
 		} );
+
+		describe( "Weapon and armor proficiency restrictions", () => {
+			// classId 12 = Wizard (Simple weapons only, no armor training at
+			// all — see db/seed.sql's classes table), the strictest class in
+			// the dataset for both checks.
+			it( "addWeaponToInventory() omits Proficiency Bonus for a weapon the class isn't trained with", () => {
+				var charId = service.createCharacter(
+					ownerUserId = variables.ownerUserId, name = "Test Untrained Wizard",
+					classId = 12, str = 10, dex = 10, con = 10, intScore = 10, wis = 10, cha = 10
+				);
+				service.addWeaponToInventory( charId, 22, "melee" ); // Longsword — Martial
+				var inv = service.getInventory( charId );
+				var longsword = inv.filter( ( i ) => i.weaponName == "Longsword" )[ 1 ];
+				expect( longsword.attackBonus ).toBe( 0 ); // 0 (Str mod) + 0 (not proficient)
+
+				service.deleteCharacter( characterId = charId, ownerUserId = variables.ownerUserId );
+			} );
+
+			it( "addWeaponToInventory() still includes Proficiency Bonus for a weapon the class IS trained with", () => {
+				var charId = service.createCharacter(
+					ownerUserId = variables.ownerUserId, name = "Test Trained Wizard",
+					classId = 12, str = 10, dex = 10, con = 10, intScore = 10, wis = 10, cha = 10
+				);
+				service.addWeaponToInventory( charId, 1, "melee" ); // Club — Simple
+				var inv = service.getInventory( charId );
+				var club = inv.filter( ( i ) => i.weaponName == "Club" )[ 1 ];
+				expect( club.attackBonus ).toBe( 2 ); // 0 (Str mod) + 2 (Proficiency Bonus)
+
+				service.deleteCharacter( characterId = charId, ownerUserId = variables.ownerUserId );
+			} );
+
+			it( "setArmorEquipped() refuses armor the class has no training in", () => {
+				var charId = service.createCharacter(
+					ownerUserId = variables.ownerUserId, name = "Test Armorless Wizard",
+					classId = 12, str = 10, dex = 10, con = 10, intScore = 10, wis = 10, cha = 10
+				);
+				service.addArmorToInventory( charId, 13 ); // Shield
+				var inv = service.getArmorInventory( charId );
+
+				expect( () => service.setArmorEquipped( charId, inv[ 1 ].id, true ) ).toThrow( "NotProficient" );
+
+				var stillUnequipped = service.getArmorInventory( charId )[ 1 ];
+				expect( stillUnequipped.equipped ).toBeFalse();
+
+				service.deleteCharacter( characterId = charId, ownerUserId = variables.ownerUserId );
+			} );
+
+			it( "setArmorEquipped() allows armor the class IS trained in", () => {
+				var charId = service.createCharacter(
+					ownerUserId = variables.ownerUserId, name = "Test Armored Fighter",
+					classId = 5, str = 10, dex = 10, con = 10, intScore = 10, wis = 10, cha = 10 // Fighter: all armor + shields
+				);
+				service.addArmorToInventory( charId, 13 ); // Shield
+				var inv = service.getArmorInventory( charId );
+
+				expect( () => service.setArmorEquipped( charId, inv[ 1 ].id, true ) ).notToThrow();
+
+				var nowEquipped = service.getArmorInventory( charId )[ 1 ];
+				expect( nowEquipped.equipped ).toBeTrue();
+
+				service.deleteCharacter( characterId = charId, ownerUserId = variables.ownerUserId );
+			} );
+		} );
 	}
 
 }

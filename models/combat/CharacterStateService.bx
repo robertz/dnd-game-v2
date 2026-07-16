@@ -178,7 +178,7 @@ class singleton {
 	 */
 	function loadCharacter( characterId ) {
 		var rows = queryExecute(
-			"SELECT c.*, cl.name AS className, cl.hit_die, cl.saving_throw_proficiencies
+			"SELECT c.*, cl.name AS className, cl.hit_die, cl.saving_throw_proficiencies, cl.weapon_proficiencies
 			 FROM characters c
 			 JOIN classes cl ON cl.id = c.class_id
 			 WHERE c.id = :characterId",
@@ -426,6 +426,49 @@ class singleton {
 			}
 		}
 
+		// Unarmored Defense (Barbarian 1: adds Con; Monk 1: adds Wis, and
+		// only if not carrying a shield either) — while wearing no body
+		// armor, player.armorClass already holds 10 + Dex (see
+		// CharacterService._recalculateArmorClass()), plus a shield's flat
+		// bonus if one's equipped; this just adds whichever ability mod the
+		// feature grants on top, rather than replacing the value outright
+		// (replacing it would silently drop that shield bonus). A character
+		// multiclassed into both takes whichever mod is higher, same as a DM
+		// would rule for two features that can't stack; never applied if it
+		// would lower AC (a negative Con/Wis mod just doesn't help here).
+		if ( arrayFindNoCase( player.features, "Unarmored Defense" ) > 0 ) {
+			var wornBodyArmorUD = queryExecute(
+				"SELECT 1 AS found FROM character_armor ca
+				 JOIN armors a ON a.id = ca.armor_id
+				 WHERE ca.character_id = :characterId AND ca.equipped = 1 AND a.armor_type != 'shield'",
+				{ "characterId": arguments.characterId },
+				{ datasource: "gameserver" }
+			);
+			if ( wornBodyArmorUD.recordCount == 0 ) {
+				var classNames = [];
+				for ( var cls in player.classes ) {
+					classNames.append( cls.className );
+				}
+				var unarmoredDefenseBonus = 0;
+				if ( arrayFindNoCase( classNames, "Barbarian" ) > 0 ) {
+					unarmoredDefenseBonus = max( unarmoredDefenseBonus, modifiers.con );
+				}
+				if ( arrayFindNoCase( classNames, "Monk" ) > 0 ) {
+					var wornShield = queryExecute(
+						"SELECT 1 AS found FROM character_armor ca
+						 JOIN armors a ON a.id = ca.armor_id
+						 WHERE ca.character_id = :characterId AND ca.equipped = 1 AND a.armor_type = 'shield'",
+						{ "characterId": arguments.characterId },
+						{ datasource: "gameserver" }
+					);
+					if ( wornShield.recordCount == 0 ) {
+						unarmoredDefenseBonus = max( unarmoredDefenseBonus, modifiers.wis );
+					}
+				}
+				player.armorClass += unarmoredDefenseBonus;
+			}
+		}
+
 		// Rage (Barbarian 1): derives ragesRemaining from the persisted
 		// ragesUsed and the level-based max — 0 for a non-Barbarian.
 		variables.rules.recomputeRagesRemaining( player );
@@ -444,13 +487,19 @@ class singleton {
 
 		var inventoryRows = queryExecute(
 			"SELECT ci.id, ci.weapon_id, ci.category, ci.equipped, ci.quantity, ci.attack_bonus, ci.damage_bonus,
-			        w.name, w.damage_dice, w.damage_type, w.properties, w.mastery
+			        w.name, w.category AS weaponCategory, w.damage_dice, w.damage_type, w.properties, w.mastery
 			 FROM character_inventory ci
 			 JOIN weapons w ON w.id = ci.weapon_id
 			 WHERE ci.character_id = :characterId",
 			{ "characterId": arguments.characterId },
 			{ datasource: "gameserver" }
 		);
+		// Whether attack_bonus (persisted, computed once when the weapon was
+		// added — see CharacterService.addWeaponToInventory()) should keep
+		// including Proficiency Bonus as the character levels — see
+		// _levelUp()'s own proficiency-bonus-increase loop, which skips a
+		// weapon this is false for.
+		var speciesGrantedWeaponNames = variables.rules.weaponProficienciesFromTraits( speciesMechanics.traitNames );
 		for ( var invRow in inventoryRows ) {
 			var item = {
 				// Maps this item back to its database rows.
@@ -475,6 +524,10 @@ class singleton {
 				// feature (Barbarian/Fighter/Paladin/Ranger/Rogue at level 1).
 				"mastery": isNull( invRow.mastery ) ? "" : invRow.mastery
 			};
+			item.isWeaponProficient = variables.rules.isProficientWithWeapon(
+				row.weapon_proficiencies[ 1 ], speciesGrantedWeaponNames,
+				{ "name": item.name, "category": invRow.weaponCategory, "properties": item.properties }
+			);
 			if ( item.category == "ranged" ) {
 				var range = variables.rules.parseWeaponRange( invRow.properties );
 				if ( !isNull( range ) ) {

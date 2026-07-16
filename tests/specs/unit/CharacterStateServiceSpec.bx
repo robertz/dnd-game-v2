@@ -58,6 +58,129 @@ class extends="testbox.system.BaseSpec" {
 				expect( player.deathSaveFailures ).toBe( 0 );
 			} );
 		} );
+
+		describe( "loadCharacter() — Unarmored Defense", () => {
+			// classId 1 = Barbarian (Con), classId 6 = Monk (Wis) — see db/seed.sql's classes table.
+			it( "gives an unarmored Barbarian 10 + Dex + Con instead of the plain 10 + Dex baseline", () => {
+				var charId = characterService.createCharacter(
+					ownerUserId = variables.ownerUserId, name = "Test Barbarian",
+					classId = 1, str = 16, dex = 14, con = 16, intScore = 10, wis = 10, cha = 10
+				);
+				var player = combatService.loadCharacter( charId );
+				expect( player.armorClass ).toBe( 15 ); // 10 + 2 (dex) + 3 (con)
+				characterService.deleteCharacter( characterId = charId, ownerUserId = variables.ownerUserId );
+			} );
+
+			it( "gives an unarmored, shieldless Monk 10 + Dex + Wis", () => {
+				var charId = characterService.createCharacter(
+					ownerUserId = variables.ownerUserId, name = "Test Monk",
+					classId = 6, str = 10, dex = 16, con = 10, intScore = 10, wis = 14, cha = 10
+				);
+				var player = combatService.loadCharacter( charId );
+				expect( player.armorClass ).toBe( 15 ); // 10 + 3 (dex) + 2 (wis)
+				characterService.deleteCharacter( characterId = charId, ownerUserId = variables.ownerUserId );
+			} );
+
+			it( "falls back to the plain armor formula once a Barbarian dons body armor", () => {
+				var charId = characterService.createCharacter(
+					ownerUserId = variables.ownerUserId, name = "Test Armored Barbarian",
+					classId = 1, str = 16, dex = 14, con = 16, intScore = 10, wis = 10, cha = 10
+				);
+				characterService.addArmorToInventory( charId, 2 ); // Leather (light)
+				var inv = characterService.getArmorInventory( charId );
+				characterService.setArmorEquipped( charId, inv[ 1 ].id, true );
+
+				var player = combatService.loadCharacter( charId );
+				expect( player.armorClass ).toBe( 13 ); // 11 (Leather base) + 2 (dex), Con no longer applies
+				characterService.deleteCharacter( characterId = charId, ownerUserId = variables.ownerUserId );
+			} );
+
+			it( "still lets an unarmored Barbarian carry a shield (Con bonus unaffected)", () => {
+				var charId = characterService.createCharacter(
+					ownerUserId = variables.ownerUserId, name = "Test Shielded Barbarian",
+					classId = 1, str = 16, dex = 14, con = 16, intScore = 10, wis = 10, cha = 10
+				);
+				characterService.addArmorToInventory( charId, 13 ); // Shield
+				var inv = characterService.getArmorInventory( charId );
+				characterService.setArmorEquipped( charId, inv[ 1 ].id, true );
+
+				var player = combatService.loadCharacter( charId );
+				expect( player.armorClass ).toBe( 17 ); // 10 + 2 (dex) + 3 (con) + 2 (shield)
+				characterService.deleteCharacter( characterId = charId, ownerUserId = variables.ownerUserId );
+			} );
+
+			it( "loses the Wis bonus once a Monk picks up a shield, even with no body armor", () => {
+				var charId = characterService.createCharacter(
+					ownerUserId = variables.ownerUserId, name = "Test Shielded Monk",
+					classId = 6, str = 10, dex = 16, con = 10, intScore = 10, wis = 14, cha = 10
+				);
+				// A Monk's armor_training is "None" — proficient with nothing,
+				// not even a shield — so setArmorEquipped() now refuses this
+				// (see its own NotProficient check). This test is about the AC
+				// math once a shield IS on, not whether equipping one is
+				// legal, so it writes character_armor/characters directly
+				// instead, bypassing both the proficiency gate and the
+				// _recalculateArmorClass() call setArmorEquipped() would
+				// otherwise trigger — so this sets armor_class to the same
+				// 10 + Dex + shield baseline that call would have landed on.
+				characterService.addArmorToInventory( charId, 13 ); // Shield
+				var inv = characterService.getArmorInventory( charId );
+				queryExecute(
+					"UPDATE character_armor SET equipped = 1 WHERE id = :id",
+					{ "id": inv[ 1 ].id }, { datasource: "gameserver" }
+				);
+				queryExecute(
+					"UPDATE characters SET armor_class = 15 WHERE id = :id", // 10 + 3 (dex) + 2 (shield)
+					{ "id": charId }, { datasource: "gameserver" }
+				);
+
+				var player = combatService.loadCharacter( charId );
+				expect( player.armorClass ).toBe( 15 ); // 10 + 3 (dex) + 2 (shield), Wis no longer applies
+				characterService.deleteCharacter( characterId = charId, ownerUserId = variables.ownerUserId );
+			} );
+		} );
+
+		describe( "applyAbilityScoreImprovement() — Unarmored Defense", () => {
+			// A level-up (and its ability score improvement) can happen
+			// mid-combat, right after the kill that crossed the XP
+			// threshold — unlike CombatServiceSpec's own ASI tests, this one
+			// needs a real DB-backed character (loadCharacter()'s features/
+			// classes/characterId) since the AC bump only applies while
+			// Unarmored Defense is actually in effect.
+			it( "raises an unarmored Barbarian's AC when Constitution is the chosen ability", () => {
+				var charId = characterService.createCharacter(
+					ownerUserId = variables.ownerUserId, name = "Test Leveling Barbarian",
+					classId = 1, str = 16, dex = 14, con = 14, intScore = 10, wis = 10, cha = 10
+				);
+				var player = combatService.loadCharacter( charId );
+				expect( player.armorClass ).toBe( 14 ); // 10 + 2 (dex) + 2 (con)
+				var state = { "player": player, "log": [] };
+				player.pendingAbilityScoreImprovements = 1;
+
+				combatService.applyAbilityScoreImprovement( state, { "abilities": [ "con" ] } );
+
+				expect( player.abilityScores.con ).toBe( 16 );
+				expect( player.armorClass ).toBe( 15 ); // Con mod went 2 -> 3, AC follows
+				characterService.deleteCharacter( characterId = charId, ownerUserId = variables.ownerUserId );
+			} );
+
+			it( "does not touch AC for a Constitution increase on a non-Barbarian", () => {
+				var charId = characterService.createCharacter(
+					ownerUserId = variables.ownerUserId, name = "Test Leveling Rogue",
+					classId = 9, str = 10, dex = 14, con = 14, intScore = 10, wis = 10, cha = 10
+				);
+				var player = combatService.loadCharacter( charId );
+				var startingAC = player.armorClass;
+				var state = { "player": player, "log": [] };
+				player.pendingAbilityScoreImprovements = 1;
+
+				combatService.applyAbilityScoreImprovement( state, { "abilities": [ "con" ] } );
+
+				expect( player.abilityScores.con ).toBe( 16 );
+				expect( player.armorClass ).toBe( startingAC );
+				characterService.deleteCharacter( characterId = charId, ownerUserId = variables.ownerUserId );
+			} );
+		} );
 	}
 
 }

@@ -472,7 +472,10 @@ const CharacterSheet = {
 				applyInventoryUpdate( data );
 				message.value = action.includes( "remove" ) ? "Removed." : "Updated.";
 			} catch ( e ) {
-				message.value = "Action failed.";
+				// Prefer the server's own message (e.g. "Not proficient with
+				// heavy armor.") over a generic fallback — see app.js's api()
+				// for how e.message ends up holding the server's own {"error"} text.
+				message.value = e.message || "Action failed.";
 			}
 		}
 

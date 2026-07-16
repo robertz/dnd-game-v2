@@ -59,6 +59,9 @@ class singleton {
 	function featDescription( name ) { return variables.rules.featDescription( argumentCollection = arguments ); }
 	function featureDescription( name ) { return variables.rules.featureDescription( argumentCollection = arguments ); }
 	function resolveSkillProficiencies( species, background ) { return variables.rules.resolveSkillProficiencies( argumentCollection = arguments ); }
+	function weaponProficienciesFromTraits( traitNames ) { return variables.rules.weaponProficienciesFromTraits( argumentCollection = arguments ); }
+	function isProficientWithWeapon( classWeaponProficiencyText, speciesGrantedWeaponNames, weapon ) { return variables.rules.isProficientWithWeapon( argumentCollection = arguments ); }
+	function isProficientWithArmor( armorTrainingText, armorType ) { return variables.rules.isProficientWithArmor( argumentCollection = arguments ); }
 	function parseClassSkillChoice( text ) { return variables.rules.parseClassSkillChoice( argumentCollection = arguments ); }
 	function rollSkillCheck( combatant, skill, dc ) { return variables.rules.rollSkillCheck( argumentCollection = arguments ); }
 	function consumableEffects() { return variables.rules.consumableEffects(); }

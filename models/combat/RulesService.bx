@@ -22,6 +22,14 @@ class singleton {
 		"Menacing": [ "Intimidation" ]
 	};
 
+	// Species traits that grant proficiency with specific weapons, on top of
+	// whatever the character's class already grants — see
+	// weaponProficienciesFromTraits()/isProficientWithWeapon().
+	TRAIT_WEAPON_GRANTS = {
+		"Dwarven Combat Training": [ "Battleaxe", "Handaxe", "Light Hammer", "Warhammer" ],
+		"Elf Weapon Training": [ "Longsword", "Shortsword", "Shortbow", "Longbow" ]
+	};
+
 	// Species traits that grant "N skills of your choice" rather than a
 	// fixed skill — e.g. Half-Elf's Skill Versatility. The player picks
 	// which via characterCreation.bx's Origin step (see
@@ -271,6 +279,83 @@ class singleton {
 			}
 		}
 		return skills;
+	}
+
+	/**
+	 * Specific weapon names a character's species traits grant proficiency
+	 * with (e.g. Dwarven Combat Training), independent of whatever their
+	 * class's own weapon_proficiencies text already covers — see
+	 * isProficientWithWeapon().
+	 */
+	function weaponProficienciesFromTraits( traitNames ) {
+		var names = [];
+		for ( var traitName in TRAIT_WEAPON_GRANTS ) {
+			if ( arrayFindNoCase( arguments.traitNames, traitName ) == 0 ) {
+				continue;
+			}
+			for ( var weaponName in TRAIT_WEAPON_GRANTS[ traitName ] ) {
+				if ( arrayFindNoCase( names, weaponName ) == 0 ) {
+					names.append( weaponName );
+				}
+			}
+		}
+		return names;
+	}
+
+	/**
+	 * Whether a character is proficient with `weapon` (needs `.name`,
+	 * `.category` — "Simple" or "Martial", per weapons.category — and
+	 * `.properties`, either the raw "Finesse, Light" text or the already-
+	 * split/trimmed array), given their class's weapon_proficiencies text
+	 * (classes.weapon_proficiencies) and any species-granted specific
+	 * weapon names (weaponProficienciesFromTraits()).
+	 *
+	 * Every class's proficiency text in the current dataset is one of four
+	 * fixed shapes: "Simple weapons", "Simple and Martial weapons", or one
+	 * of Monk's/Rogue's "Martial weapons that have the [Light / Finesse or
+	 * Light] property" carve-outs — matched by keyword rather than a
+	 * general English parser, since the dataset is small and fixed; a new
+	 * class with a differently-worded restriction would need a new keyword
+	 * check here, not a rewrite.
+	 */
+	function isProficientWithWeapon( classWeaponProficiencyText, speciesGrantedWeaponNames, weapon ) {
+		if ( arrayFindNoCase( arguments.speciesGrantedWeaponNames, arguments.weapon.name ) > 0 ) {
+			return true;
+		}
+		var text = arguments.classWeaponProficiencyText;
+		if ( !len( text ) ) {
+			return false;
+		}
+		if ( arguments.weapon.category == "Simple" ) {
+			return findNoCase( "Simple", text ) > 0;
+		}
+		if ( arguments.weapon.category == "Martial" ) {
+			if ( findNoCase( "Simple and Martial", text ) > 0 ) {
+				return true;
+			}
+			var props = isArray( arguments.weapon.properties ) ? arrayToList( arguments.weapon.properties ) : arguments.weapon.properties;
+			if ( findNoCase( "Light property", text ) > 0 && findNoCase( "Light", props ) > 0 ) {
+				return true;
+			}
+			if ( findNoCase( "Finesse", text ) > 0 && findNoCase( "Finesse", props ) > 0 ) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Whether a character is proficient with `armorType` ("light"/"medium"/
+	 * "heavy"/"shield", per armors.armor_type) given their class's
+	 * armor_training text (classes.armor_training — e.g. "Light and Medium
+	 * armor and Shields", or "None" for a class with no armor training at
+	 * all, like Monk/Sorcerer/Wizard).
+	 */
+	function isProficientWithArmor( armorTrainingText, armorType ) {
+		if ( !len( arguments.armorTrainingText ) || findNoCase( "None", arguments.armorTrainingText ) > 0 ) {
+			return false;
+		}
+		return findNoCase( arguments.armorType, arguments.armorTrainingText ) > 0;
 	}
 
 	/**
