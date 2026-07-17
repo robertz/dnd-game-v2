@@ -129,6 +129,85 @@ class extends="testbox.system.BaseSpec" {
 				service.deleteCharacter( characterId = charId, ownerUserId = variables.ownerUserId );
 			} );
 		} );
+
+		describe( "getParty()/setParty()", () => {
+			it( "persists an ordered party and returns it in that order", () => {
+				var charA = makeCharacter();
+				var charB = makeCharacter();
+
+				service.setParty( variables.ownerUserId, [ charB, charA ] );
+				var party = service.getParty( variables.ownerUserId );
+
+				expect( party.recordCount ).toBe( 2 );
+				expect( party.id[ 1 ] ).toBe( charB );
+				expect( party.id[ 2 ] ).toBe( charA );
+
+				service.deleteCharacter( characterId = charA, ownerUserId = variables.ownerUserId );
+				service.deleteCharacter( characterId = charB, ownerUserId = variables.ownerUserId );
+			} );
+
+			it( "replaces the whole party rather than merging with the previous one", () => {
+				var charA = makeCharacter();
+				var charB = makeCharacter();
+
+				service.setParty( variables.ownerUserId, [ charA ] );
+				service.setParty( variables.ownerUserId, [ charB ] );
+				var party = service.getParty( variables.ownerUserId );
+
+				expect( party.recordCount ).toBe( 1 );
+				expect( party.id[ 1 ] ).toBe( charB );
+
+				service.deleteCharacter( characterId = charA, ownerUserId = variables.ownerUserId );
+				service.deleteCharacter( characterId = charB, ownerUserId = variables.ownerUserId );
+			} );
+
+			it( "silently drops a character id that doesn't belong to the requesting owner", () => {
+				var mine    = makeCharacter();
+				var notMine = service.createCharacter(
+					ownerUserId = variables.otherUserId, name = "Test Not Mine",
+					classId = 1, str = 10, dex = 10, con = 10, intScore = 10, wis = 10, cha = 10
+				);
+
+				service.setParty( variables.ownerUserId, [ mine, notMine ] );
+				var party = service.getParty( variables.ownerUserId );
+
+				expect( party.recordCount ).toBe( 1 );
+				expect( party.id[ 1 ] ).toBe( mine );
+
+				service.deleteCharacter( characterId = mine, ownerUserId = variables.ownerUserId );
+				service.deleteCharacter( characterId = notMine, ownerUserId = variables.otherUserId );
+			} );
+
+			it( "caps the party at 4 members, keeping only the first 4 given", () => {
+				var ids = [];
+				for ( var i = 1; i <= 5; i++ ) {
+					ids.append( makeCharacter() );
+				}
+
+				service.setParty( variables.ownerUserId, ids );
+				var party = service.getParty( variables.ownerUserId );
+
+				expect( party.recordCount ).toBe( 4 );
+
+				for ( var charId in ids ) {
+					service.deleteCharacter( characterId = charId, ownerUserId = variables.ownerUserId );
+				}
+			} );
+
+			it( "drops a character from the party when it's deleted (party_members cascades)", () => {
+				var charA = makeCharacter();
+				var charB = makeCharacter();
+
+				service.setParty( variables.ownerUserId, [ charA, charB ] );
+				service.deleteCharacter( characterId = charA, ownerUserId = variables.ownerUserId );
+				var party = service.getParty( variables.ownerUserId );
+
+				expect( party.recordCount ).toBe( 1 );
+				expect( party.id[ 1 ] ).toBe( charB );
+
+				service.deleteCharacter( characterId = charB, ownerUserId = variables.ownerUserId );
+			} );
+		} );
 	}
 
 }

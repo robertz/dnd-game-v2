@@ -14,6 +14,10 @@ no frontend build step.
 - **Turn-based combat** — grid-based movement and line-of-sight, attacks,
   spellcasting, rage, smite, breath weapons, short/long rests, and death
   saves — synced live over a WebSocket per encounter.
+- **Standing party** — a persistent, server-side roster of up to 4
+  characters, managed from a header toolbar visible on every screen;
+  starting an adventure always uses this saved party instead of
+  re-selecting characters each time.
 - **Map editor** — paint tile-based dungeon/outdoor maps, place spawn points,
   loot, and transitions between maps/modules.
 - **Accounts** — username/password login (PBKDF2-hashed, no third-party auth),

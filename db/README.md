@@ -3,7 +3,7 @@
 Two files, generated from the live `gameserver` database rather than
 hand-maintained as incremental migrations:
 
-- **`schema.sql`** — structure only (all 27 tables, indexes, foreign keys).
+- **`schema.sql`** — structure only (all 28 tables, indexes, foreign keys).
 - **`seed.sql`** — reference/content data only: classes, subclasses, class
   features, feats, magic items, monsters, spells, spell effects, weapons,
   armors, items, species, species traits, backgrounds, conditions, and the
