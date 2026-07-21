@@ -51,7 +51,7 @@ const CharacterCreation = {
 			</template>
 
 			<template v-else>
-				<p class="encounter-intro">Step {{ step }} of {{ totalSteps }}</p>
+				<p class="encounter-intro">Step {{ displayStep }} of {{ totalSteps }}</p>
 
 				<p v-if="formError" class="encounter-banner encounter-banner-defeat">{{ formError }}</p>
 
@@ -422,7 +422,12 @@ const CharacterCreation = {
 
 		// ── Wizard state ───────────────────────────────────────────────────────
 		const step       = ref( 1 );
-		const totalSteps = 6;
+		// Non-casters skip step 5 (Spells) entirely — see nextStep()/previousStep()
+		// — so `step` itself jumps straight from 4 to 6 for them. totalSteps and
+		// displayStep (below, once hasSpellOptions exists) collapse that gap so
+		// the header reads "4 of 5" -> "5 of 5" instead of "4 of 6" -> "6 of 6",
+		// which otherwise looks like a skipped/broken step.
+		const totalSteps = computed( () => hasSpellOptions.value ? 6 : 5 );
 		const loading    = ref( true );
 		const submitting = ref( false );
 		const formError  = ref( '' );
@@ -492,6 +497,13 @@ const CharacterCreation = {
 
 		const hasSpellOptions = computed( () =>
 			cantripOptions.value.length > 0 || spellOptions.value.length > 0
+		);
+
+		// The Review step is always internally step 6 (see nextStep()), even
+		// for a non-caster who never visits step 5 — so it displays as
+		// totalSteps (5) for them instead of a "6" that was never reached.
+		const displayStep = computed( () =>
+			( !hasSpellOptions.value && step.value === 6 ) ? 5 : step.value
 		);
 
 		// Drives both the persistent "choices so far" panel (steps 1-5) and
@@ -750,7 +762,7 @@ const CharacterCreation = {
 			const err = validateStep( step.value );
 			if ( err ) { formError.value = err; return; }
 			formError.value = '';
-			if ( step.value < totalSteps ) {
+			if ( step.value < totalSteps.value ) {
 				step.value++;
 				if ( step.value === 5 && !hasSpellOptions.value ) step.value++;
 			}
@@ -830,7 +842,7 @@ const CharacterCreation = {
 		} );
 
 		return {
-			step, totalSteps, loading, submitting, formError,
+			step, totalSteps, displayStep, loading, submitting, formError,
 			ABILITY_ORDER, ALIGNMENT_OPTIONS, ALIGNMENT_DESCRIPTIONS, ALL_SKILL_NAMES,
 			classes, selectedClassId, selectedClass, selectedClassSkills, selectedFightingStyle,
 			cantripOptions, spellOptions, selectedCantripName, selectedSpellName,
