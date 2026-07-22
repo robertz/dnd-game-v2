@@ -147,8 +147,9 @@ the server running (`box server start`, prints the URL/port):
   for a JSON summary (`totalSpecs`, `totalPass`, `totalFail`, `totalError`).
 
 Useful query params: `reporter` (`simple` default, `json`, `text`, `dot`),
-`bundles` (restrict to one spec, e.g. `?bundles=CombatServiceSpec`),
-`labels` (restrict to labeled tests).
+`bundles` (restrict to one spec — needs the fully-qualified dotted path,
+e.g. `?bundles=tests.specs.unit.CombatServiceSpec`, not just the bare
+class name), `labels` (restrict to labeled tests).
 
 ## Credits
 
